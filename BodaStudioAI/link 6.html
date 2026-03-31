@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Link Saya - Versi Profesional</title>
+    
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Font Awesome (untuk ikon) -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    
+    <!-- SortableJS (untuk drag-and-drop) -->
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
+
+    <!-- SweetAlert2 (untuk dialog & notifikasi) -->
+    <script src="//cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+
+    <!-- CSS Kustom -->
+    <style>
+        body { background: linear-gradient(-45deg, #a2d2ff, #fefae0, #ffffff, #bde0fe); background-size: 400% 400%; animation: animated-gradient 15s ease infinite; background-attachment: fixed; }
+        @keyframes animated-gradient { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+        .glass-card { background: rgba(255, 255, 255, 0.25); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.3); box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.2); transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); }
+        .glass-card-hover:hover { transform: translateY(-4px) scale(1.02); box-shadow: 0 14px 28px rgba(31, 38, 135, 0.25); background: rgba(255, 255, 255, 0.4); }
+        .hidden-view { display: none; }
+        .fade-in-up { animation: fadeInUp 0.5s ease-out forwards; opacity: 0; }
+        @keyframes fadeInUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        .sortable-ghost { opacity: 0.4; background: #c8ebfb; }
+        .drag-handle { cursor: grab; } .drag-handle:active { cursor: grabbing; }
+        .category-title { font-size: 1.25rem; font-weight: 700; color: #374151; margin-top: 1.5rem; margin-bottom: 0.75rem; text-align: center; }
+    </style>
+</head>
+
+<body class="min-h-screen p-4">
+
+    <!-- === VIEW UTAMA (LINKTREE PUBLIK) === -->
+    <div id="mainView">
+        <button id="adminLoginBtn" class="absolute top-4 left-4 glass-card px-4 py-2 rounded-lg font-semibold text-gray-700 hover:bg-white/50 transition z-10"><i class="fa-solid fa-user-shield mr-2"></i>Admin</button>
+        <div class="w-full max-w-lg mx-auto mt-8 p-6 space-y-6">
+            <header class="text-center mb-10 fade-in-up">
+                <img id="publicProfileImg" src="https://via.placeholder.com/150" alt="Foto Profil" class="w-32 h-32 rounded-full mx-auto object-cover border-4 border-white shadow-xl">
+                <h1 id="publicProfileName" class="text-4xl font-extrabold mt-4 text-gray-800 drop-shadow-lg"></h1>
+                <p id="publicProfileBio" class="text-xl font-light text-gray-700 mt-1"></p>
+            </header>
+            <div id="links-container" class="space-y-4"></div>
+        </div>
+    </div>
+
+    <!-- === VIEW LOGIN === -->
+    <div id="loginView" class="hidden-view">
+        <div class="min-h-screen flex items-center justify-center fade-in-up">
+            <div class="glass-card w-full max-w-md p-8 rounded-2xl space-y-6">
+                <h2 class="text-3xl font-bold text-center text-gray-800">Login Admin</h2>
+                <form id="loginForm" class="space-y-4">
+                    <input id="username" type="text" required placeholder="Username" class="w-full px-4 py-3 bg-white/50 border-2 border-transparent rounded-md focus:outline-none focus:border-blue-400 transition">
+                    <input id="password" type="password" required placeholder="Password" class="w-full px-4 py-3 bg-white/50 border-2 border-transparent rounded-md focus:outline-none focus:border-blue-400 transition">
+                    <button type="submit" class="w-full py-3 px-4 bg-blue-500 text-white font-semibold rounded-lg shadow-md hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-opacity-75 transition transform hover:scale-105">Masuk</button>
+                    <p id="loginError" class="text-red-500 text-sm text-center"></p>
+                </form>
+                <button id="backToMainBtn" class="w-full text-center text-sm text-gray-600 hover:underline">Kembali ke Halaman Utama</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- === VIEW ADMIN === -->
+    <div id="adminView" class="hidden-view">
+        <div class="flex flex-col md:flex-row h-screen bg-white/20">
+            <aside class="w-full md:w-64 p-6 flex-shrink-0 flex flex-col glass-card">
+                <h2 class="text-2xl font-bold text-gray-800 mb-8">Admin Panel</h2>
+                <nav class="flex flex-col space-y-2 mb-auto">
+                    <button id="manageLinksBtn" class="w-full py-2 px-4 text-left bg-blue-100 text-blue-800 font-semibold rounded-lg"><i class="fa-solid fa-link w-6"></i> Kelola Link</button>
+                    <button id="settingsBtn" class="w-full py-2 px-4 text-left text-gray-700 font-semibold rounded-lg hover:bg-gray-200"><i class="fa-solid fa-sliders w-6"></i> Pengaturan</button>
+                </nav>
+                <div class="space-y-2">
+                    <button id="saveAndExitBtn" class="w-full py-2 px-4 bg-green-500 text-white font-semibold rounded-lg shadow-md hover:bg-green-600 transition"><i class="fa-solid fa-save mr-2"></i> Simpan & Keluar</button>
+                </div>
+            </aside>
+
+            <main class="flex-1 p-8 overflow-y-auto">
+                <div id="linkManagementContent">
+                    <h1 class="text-3xl font-bold mb-2 text-gray-800">Kelola Link</h1>
+                    <p class="text-gray-600 mb-6">Seret untuk mengurutkan, atau klik Edit untuk mengubah detail link.</p>
+                    <div id="admin-links-container" class="space-y-4"></div>
+                    <div id="pagination-controls" class="mt-6 flex justify-between items-center"></div>
+                    <button id="addNewLinkBtn" class="mt-6 py-2 px-4 bg-blue-500 text-white font-semibold rounded-lg shadow-md hover:bg-blue-600 transition"><i class="fa-solid fa-plus mr-2"></i> Tambah Link Baru</button>
+                </div>
+
+                <div id="settingsContent" class="hidden-view">
+                    <h1 class="text-3xl font-bold mb-6 text-gray-800">Pengaturan Profil</h1>
+                    <div class="space-y-6 glass-card p-6 rounded-lg max-w-2xl">
+                        <div class="flex items-center space-x-6">
+                            <img id="profileImagePreview" src="" class="w-24 h-24 rounded-full object-cover bg-gray-200 border-2 border-white">
+                            <div class="flex-1">
+                                <label for="profileImageInput" class="text-sm font-medium text-gray-700">URL Gambar Profil (Logo)</label>
+                                <input id="profileImageInput" type="text" placeholder="https://..." class="mt-1 block w-full px-3 py-2 bg-white/50 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                            </div>
+                        </div>
+                        <div>
+                            <label for="profileNameInput" class="text-sm font-medium text-gray-700">Nama Tampilan</label>
+                            <input id="profileNameInput" type="text" class="mt-1 block w-full px-3 py-2 bg-white/50 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                        </div>
+                        <div>
+                            <label for="profileBioInput" class="text-sm font-medium text-gray-700">Bio Singkat (e.g., @username)</label>
+                            <input id="profileBioInput" type="text" class="mt-1 block w-full px-3 py-2 bg-white/50 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.15.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.15.0/firebase-firestore-compat.js"></script>
+
+    <script>
+        // =================================================================================
+        // KONFIGURASI FIREBASE ANDA
+        // GANTI DENGAN KONFIGURASI DARI PROYEK FIREBASE ANDA
+        // =================================================================================
+        const firebaseConfig = {
+             apiKey: "AIzaSyD53FikQjDPnf8cVAgzXViNttYuF6qtNmU",
+  authDomain: "link-bod.firebaseapp.com",
+  projectId: "link-bod",
+  storageBucket: "link-bod.firebasestorage.app",
+  messagingSenderId: "563207613619",
+  appId: "1:563207613619:web:e52436e5778cd43cf2d4c6",
+  measurementId: "G-F4Z7LKV327"
+        };
+
+        // Inisialisasi Firebase
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+        const linksCollection = db.collection('links');
+        const profileDoc = db.collection('settings').doc('profile');
+
+        document.addEventListener('DOMContentLoaded', () => {
+            // === DOM ELEMENTS ===
+            const mainView = document.getElementById('mainView'), loginView = document.getElementById('loginView'), adminView = document.getElementById('adminView');
+            const linksContainer = document.getElementById('links-container'), adminLinksContainer = document.getElementById('admin-links-container');
+            const adminLoginBtn = document.getElementById('adminLoginBtn'), backToMainBtn = document.getElementById('backToMainBtn'), loginForm = document.getElementById('loginForm'), loginError = document.getElementById('loginError');
+            const publicProfileImg = document.getElementById('publicProfileImg'), publicProfileName = document.getElementById('publicProfileName'), publicProfileBio = document.getElementById('publicProfileBio');
+            const saveAndExitBtn = document.getElementById('saveAndExitBtn'), addNewLinkBtn = document.getElementById('addNewLinkBtn');
+            const manageLinksBtn = document.getElementById('manageLinksBtn'), settingsBtn = document.getElementById('settingsBtn');
+            const linkManagementContent = document.getElementById('linkManagementContent'), settingsContent = document.getElementById('settingsContent');
+            const profileNameInput = document.getElementById('profileNameInput'), profileBioInput = document.getElementById('profileBioInput'), profileImageInput = document.getElementById('profileImageInput'), profileImagePreview = document.getElementById('profileImagePreview');
+            const paginationControls = document.getElementById('pagination-controls');
+
+            // === STATE & DATA ===
+            let linksData = [], profileData = {};
+            const ADMIN_USER = 'admin', ADMIN_PASS = 'password123'; // Login statis
+            let currentPage = 1, itemsPerPage = 5;
+
+            // === UI/UX FUNCTIONS ===
+            const showView = (view) => { [mainView, loginView, adminView].forEach(v => v.classList.add('hidden-view')); view.classList.remove('hidden-view'); };
+            const showAdminContent = (content) => {
+                [linkManagementContent, settingsContent].forEach(c => c.classList.add('hidden-view'));
+                content.classList.remove('hidden-view');
+                manageLinksBtn.classList.toggle('bg-blue-100', content === linkManagementContent);
+                settingsBtn.classList.toggle('bg-blue-100', content === settingsContent);
+            };
+            const Toast = Swal.mixin({ toast: true, position: 'top-end', showConfirmButton: false, timer: 3000, timerProgressBar: true });
+
+            // === DATA MANAGEMENT (FIREBASE) ===
+            const loadData = async () => {
+                try {
+                    // Load Profile
+                    const doc = await profileDoc.get();
+                    if (doc.exists) {
+                        profileData = doc.data();
+                    } else {
+                        profileData = { name: 'Nama Anda', bio: '@username', imageUrl: 'https://via.placeholder.com/150' };
+                        // Buat dokumen profil jika belum ada
+                        await profileDoc.set(profileData);
+                    }
+
+                    // Load Links
+                    const snapshot = await linksCollection.orderBy('order', 'asc').get();
+                    linksData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    
+                    renderPublicPage();
+
+                } catch (error) {
+                    console.error("Error loading data: ", error);
+                    Toast.fire({ icon: 'error', title: 'Gagal memuat data.' });
+                }
+            };
+            
+            // === RENDER FUNCTIONS (Tidak berubah signifikan) ===
+            const renderPublicPage = () => {
+                publicProfileImg.src = profileData.imageUrl;
+                publicProfileName.textContent = profileData.name;
+                publicProfileBio.textContent = profileData.bio;
+                linksContainer.innerHTML = '';
+
+                const groupedLinks = linksData.reduce((acc, link) => {
+                    const category = link.category || 'Lainnya';
+                    if (!acc[category]) acc[category] = [];
+                    acc[category].push(link);
+                    return acc;
+                }, {});
+
+                let categories = Object.keys(groupedLinks).sort();
+                // Force "Clients" to always be at the very bottom
+                const clientsIndex = categories.indexOf('Clients');
+                if (clientsIndex > -1) {
+                    categories.splice(clientsIndex, 1);
+                    categories.push('Clients');
+                }
+
+                categories.forEach(category => {
+                    // Only show title if it's not the default "Lainnya" OR if there are grouped categories
+                    if (category !== 'Lainnya' || Object.keys(groupedLinks).length > 1) {
+                        const titleEl = document.createElement('h2');
+                        titleEl.className = 'category-title fade-in-up';
+                        titleEl.textContent = category;
+                        linksContainer.appendChild(titleEl);
+                    }
+                    
+                    groupedLinks[category].forEach((link, index) => {
+                        const el = document.createElement('a');
+                        el.href = link.url;
+                        el.target = "_blank";
+                        el.rel = "noopener noreferrer";
+                        el.className = `glass-card glass-card-hover p-4 w-full flex items-center justify-center text-lg font-semibold text-gray-800 rounded-xl shadow-lg transform transition duration-300 fade-in-up`;
+                        el.style.animationDelay = `${index * 100}ms`;
+                        el.innerHTML = `<i class="${link.icon} w-6 text-center mr-3"></i><span>${link.name}</span>`;
+                        linksContainer.appendChild(el);
+                    });
+                });
+            };
+
+            const renderAdminPage = () => {
+                const startIndex = (currentPage - 1) * itemsPerPage;
+                const endIndex = startIndex + itemsPerPage;
+                const paginatedLinks = linksData.slice(startIndex, endIndex);
+
+                adminLinksContainer.innerHTML = '';
+                paginatedLinks.forEach((link) => {
+                    const el = document.createElement('div');
+                    el.className = 'glass-card p-4 rounded-lg';
+                    el.dataset.id = link.id;
+                    el.innerHTML = `
+                        <div class="view-mode flex items-center space-x-4">
+                            <span class="drag-handle text-gray-500 cursor-grab"><i class="fa-solid fa-grip-vertical"></i></span>
+                            <i class="${link.icon} w-6 text-center text-gray-600"></i>
+                            <div class="flex-1">
+                                <p class="font-semibold text-gray-800">${link.name}</p>
+                                <p class="text-sm text-gray-500">${link.category || 'Tanpa Kategori'}</p>
+                            </div>
+                            <button class="edit-btn p-2 text-blue-500 hover:text-blue-700 transition"><i class="fa-solid fa-pencil"></i></button>
+                            <button class="delete-btn p-2 text-red-500 hover:text-red-700 transition"><i class="fa-solid fa-trash"></i></button>
+                        </div>
+                        <div class="edit-mode hidden-view space-y-3">
+                            <input type="text" placeholder="Nama Link" value="${link.name}" class="admin-link-name w-full p-2 bg-white/50 border rounded">
+                            <input type="text" placeholder="Ikon (e.g., fa-brands fa-x-twitter)" value="${link.icon}" class="admin-link-icon w-full p-2 bg-white/50 border rounded">
+                            <input type="text" placeholder="URL Lengkap" value="${link.url}" class="admin-link-url w-full p-2 bg-white/50 border rounded">
+                            <input type="text" placeholder="Kategori (opsional)" value="${link.category || ''}" class="admin-link-category w-full p-2 bg-white/50 border rounded">
+                            <div class="flex justify-end space-x-2">
+                                <button class="cancel-edit-btn py-1 px-3 bg-gray-300 text-gray-800 rounded hover:bg-gray-400">Batal</button>
+                                <button class="save-link-btn py-1 px-3 bg-green-500 text-white rounded hover:bg-green-600">Simpan</button>
+                            </div>
+                        </div>
+                    `;
+                    adminLinksContainer.appendChild(el);
+                });
+                renderPaginationControls();
+                profileNameInput.value = profileData.name;
+                profileBioInput.value = profileData.bio;
+                profileImageInput.value = profileData.imageUrl;
+                profileImagePreview.src = profileData.imageUrl;
+            };
+
+            const renderPaginationControls = () => {
+                const totalPages = Math.ceil(linksData.length / itemsPerPage);
+                paginationControls.innerHTML = `
+                    <div class="flex items-center space-x-2">
+                        <label for="itemsPerPage" class="text-sm text-gray-600">Item per halaman:</label>
+                        <select id="itemsPerPage" class="bg-white/50 border rounded p-1 text-sm">
+                            <option value="5" ${itemsPerPage === 5 ? 'selected' : ''}>5</option>
+                            <option value="10" ${itemsPerPage === 10 ? 'selected' : ''}>10</option>
+                            <option value="15" ${itemsPerPage === 15 ? 'selected' : ''}>15</option>
+                        </select>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <button id="prevPageBtn" class="px-3 py-1 bg-white/50 rounded disabled:opacity-50" ${currentPage === 1 ? 'disabled' : ''}><i class="fa-solid fa-chevron-left"></i></button>
+                        <span class="text-sm text-gray-700 font-semibold">Halaman ${currentPage} dari ${totalPages || 1}</span>
+                        <button id="nextPageBtn" class="px-3 py-1 bg-white/50 rounded disabled:opacity-50" ${currentPage === totalPages || totalPages === 0 ? 'disabled' : ''}><i class="fa-solid fa-chevron-right"></i></button>
+                    </div>
+                `;
+                document.getElementById('itemsPerPage').addEventListener('change', (e) => { itemsPerPage = parseInt(e.target.value); currentPage = 1; renderAdminPage(); });
+                document.getElementById('prevPageBtn')?.addEventListener('click', () => { if (currentPage > 1) { currentPage--; renderAdminPage(); } });
+                document.getElementById('nextPageBtn')?.addEventListener('click', () => { const totalPages = Math.ceil(linksData.length / itemsPerPage); if (currentPage < totalPages) { currentPage++; renderAdminPage(); } });
+            };
+
+            // === EVENT HANDLERS ===
+            const handleLogin = (e) => {
+                e.preventDefault();
+                if (e.target.username.value === ADMIN_USER && e.target.password.value === ADMIN_PASS) {
+                    loginError.textContent = '';
+                    currentPage = 1; // Reset ke halaman 1 saat login
+                    renderAdminPage();
+                    showAdminContent(linkManagementContent);
+                    showView(adminView);
+                } else {
+                    loginError.textContent = 'Username atau password salah.';
+                }
+            };
+
+            const handleAdminContainerClick = async (e) => {
+                const linkItem = e.target.closest('.glass-card');
+                if (!linkItem) return;
+                const linkId = linkItem.dataset.id;
+                
+                if (e.target.closest('.edit-btn')) {
+                    linkItem.querySelector('.view-mode').classList.add('hidden-view');
+                    linkItem.querySelector('.edit-mode').classList.remove('hidden-view');
+                }
+                if (e.target.closest('.cancel-edit-btn')) {
+                    renderAdminPage(); // render ulang untuk membatalkan
+                }
+                if (e.target.closest('.save-link-btn')) {
+                    const updatedLinkData = {
+                        name: linkItem.querySelector('.admin-link-name').value,
+                        icon: linkItem.querySelector('.admin-link-icon').value,
+                        url: linkItem.querySelector('.admin-link-url').value,
+                        category: linkItem.querySelector('.admin-link-category').value,
+                    };
+                    try {
+                        await linksCollection.doc(linkId).update(updatedLinkData);
+                        const index = linksData.findIndex(l => l.id === linkId);
+                        linksData[index] = { ...linksData[index], ...updatedLinkData };
+                        renderAdminPage();
+                        Toast.fire({ icon: 'success', title: 'Link diperbarui!' });
+                    } catch (error) {
+                        Toast.fire({ icon: 'error', title: 'Gagal memperbarui link.' });
+                        console.error(error);
+                    }
+                }
+                if (e.target.closest('.delete-btn')) {
+                    Swal.fire({
+                        title: 'Anda yakin?', text: "Link ini akan dihapus permanen!", icon: 'warning',
+                        showCancelButton: true, confirmButtonColor: '#d33', cancelButtonColor: '#3085d6',
+                        confirmButtonText: 'Ya, hapus!', cancelButtonText: 'Batal'
+                    }).then(async (result) => {
+                        if (result.isConfirmed) {
+                             try {
+                                await linksCollection.doc(linkId).delete();
+                                linksData = linksData.filter(l => l.id !== linkId);
+                                if (linksData.length > 0 && (currentPage - 1) * itemsPerPage >= linksData.length) {
+                                    currentPage--;
+                                }
+                                renderAdminPage();
+                                Toast.fire({ icon: 'success', title: 'Link berhasil dihapus.' });
+                            } catch (error) {
+                                Toast.fire({ icon: 'error', title: 'Gagal menghapus link.' });
+                                console.error(error);
+                            }
+                        }
+                    });
+                }
+            };
+            
+            const handleAddNewLink = async () => {
+                try {
+                    // Tentukan 'order' untuk link baru. Ambil order tertinggi + 1.
+                    const highestOrder = linksData.reduce((max, link) => link.order > max ? link.order : max, -1);
+                    const newLink = { 
+                        name: 'Link Baru', url: '#', icon: 'fa-solid fa-link', category: '',
+                        order: highestOrder + 1
+                    };
+                    const docRef = await linksCollection.add(newLink);
+                    linksData.push({ id: docRef.id, ...newLink });
+                    currentPage = Math.ceil(linksData.length / itemsPerPage);
+                    renderAdminPage();
+                    const newItem = adminLinksContainer.querySelector(`[data-id='${docRef.id}']`);
+                    newItem?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    newItem?.querySelector('.edit-btn').click();
+                } catch (error) {
+                    Toast.fire({ icon: 'error', title: 'Gagal menambah link.'});
+                    console.error(error);
+                }
+            };
+
+            const handleSaveAndExit = async () => {
+                const newProfileData = { 
+                    name: profileNameInput.value, 
+                    bio: profileBioInput.value, 
+                    imageUrl: profileImageInput.value 
+                };
+                try {
+                    await profileDoc.set(newProfileData, { merge: true });
+                    Toast.fire({ icon: 'success', title: 'Perubahan disimpan!' });
+                    await loadData(); // Muat ulang semua data untuk sinkronisasi
+                    showView(mainView);
+                } catch(error) {
+                    Toast.fire({ icon: 'error', title: 'Gagal menyimpan pengaturan.' });
+                    console.error(error);
+                }
+            };
+
+            // === INITIALIZATION ===
+            adminLoginBtn.addEventListener('click', () => showView(loginView));
+            backToMainBtn.addEventListener('click', () => showView(mainView));
+            loginForm.addEventListener('submit', handleLogin);
+            addNewLinkBtn.addEventListener('click', handleAddNewLink);
+            saveAndExitBtn.addEventListener('click', handleSaveAndExit);
+            manageLinksBtn.addEventListener('click', () => showAdminContent(linkManagementContent));
+            settingsBtn.addEventListener('click', () => showAdminContent(settingsContent));
+            profileImageInput.addEventListener('input', () => profileImagePreview.src = profileImageInput.value);
+            adminLinksContainer.addEventListener('click', handleAdminContainerClick);
+
+            new Sortable(adminLinksContainer, {
+                animation: 150, ghostClass: 'sortable-ghost', handle: '.drag-handle',
+                onEnd: async (evt) => {
+                    const pageStartIndex = (currentPage - 1) * itemsPerPage;
+                    const [movedItem] = linksData.splice(pageStartIndex + evt.oldDraggableIndex, 1);
+                    linksData.splice(pageStartIndex + evt.newDraggableIndex, 0, movedItem);
+
+                    const batch = db.batch();
+                    linksData.forEach((link, index) => {
+                        link.order = index;
+                        const docRef = linksCollection.doc(link.id);
+                        batch.update(docRef, { order: index });
+                    });
+                    
+                    try {
+                        await batch.commit();
+                        renderAdminPage();
+                    } catch (error) {
+                        Toast.fire({ icon: 'error', title: 'Gagal menyimpan urutan.'});
+                        console.error(error);
+                        await loadData(); // Rollback jika gagal
+                        renderAdminPage();
+                    }
+                }
+            });
+
+            loadData().then(() => {
+                showView(mainView);
+            });
+        });
+    </script>
+</body>
+</html>
