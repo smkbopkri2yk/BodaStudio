@@ -2173,10 +2173,38 @@ function closeModal() {
 // ══════════════════════════════════════
 
 const SettingsState = {
-  gasUrl: localStorage.getItem('boda_gas_url') || '',
-  folderId: localStorage.getItem('boda_folder_id') || '',
+  gasUrl: '',
+  folderId: '',
+  isLoaded: false,
 
-  save(url, folder) {
+  async load() {
+    if (!fbDb) {
+      this.gasUrl = localStorage.getItem('boda_gas_url') || '';
+      this.folderId = localStorage.getItem('boda_folder_id') || '';
+      this.isLoaded = true;
+      return;
+    }
+    try {
+      const doc = await fbDb.collection('settings').doc('cloud_sync').get();
+      if (doc.exists) {
+        const data = doc.data();
+        this.gasUrl = data.gasUrl || '';
+        this.folderId = data.folderId || '';
+        localStorage.setItem('boda_gas_url', this.gasUrl);
+        localStorage.setItem('boda_folder_id', this.folderId);
+      } else {
+        this.gasUrl = localStorage.getItem('boda_gas_url') || '';
+        this.folderId = localStorage.getItem('boda_folder_id') || '';
+      }
+    } catch(e) {
+      this.gasUrl = localStorage.getItem('boda_gas_url') || '';
+      this.folderId = localStorage.getItem('boda_folder_id') || '';
+      console.error("Firebase settings load error:", e);
+    }
+    this.isLoaded = true;
+  },
+
+  async save(url, folder) {
     this.gasUrl = url.trim();
     
     // Auto-sanitize Folder ID (remove ? queries and URL prefixes)
@@ -2188,11 +2216,27 @@ const SettingsState = {
     this.folderId = cleanFolder.trim();
     localStorage.setItem('boda_gas_url', this.gasUrl);
     localStorage.setItem('boda_folder_id', this.folderId);
+
+    if (fbDb) {
+      try {
+        await fbDb.collection('settings').doc('cloud_sync').set({
+          gasUrl: this.gasUrl,
+          folderId: this.folderId
+        }, { merge: true });
+      } catch(e) {
+        console.error("Failed saving settings to Firebase:", e);
+      }
+    }
   }
 };
 
-function renderSettings() {
+async function renderSettings() {
   const main = document.getElementById('main-content');
+  if (!SettingsState.isLoaded) {
+    main.innerHTML = `<div style="padding:4rem 2rem;text-align:center;color:var(--text-muted);">☁️ Loading configs from Firebase...</div>`;
+    await SettingsState.load();
+  }
+
   main.innerHTML = `
     <div class="page-enter" style="height:100%;max-width:800px;margin:0 auto;padding-top:1rem;display:flex;flex-direction:column;gap:1.5rem;">
       <div class="page-header" style="margin-bottom:0;">
@@ -2508,6 +2552,7 @@ function toggleSidebar() {
 // ── Initialize ──
 document.addEventListener('DOMContentLoaded', () => {
   Toast.init();
+  SettingsState.load(); // Load global config from Firebase
 
   // Register routes
   Router.register('#dashboard', () => { renderDashboard(); });
