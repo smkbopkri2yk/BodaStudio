@@ -640,10 +640,10 @@ function handlePhotoClick(el) {
   _clickCount++;
   if (_clickCount === 1) {
     _clickTimer = setTimeout(() => {
-      // Single click → select/deselect
+      // Single click → select/deselect (INSTANT DOM update, no full re-render)
       _clickCount = 0;
       SelectionState.toggleSelect(photoId);
-      renderProject(projectId);
+      _updatePhotoItemDOM(el, photoId, projectId);
     }, 250);
   } else if (_clickCount === 2) {
     // Double click → open lightbox
@@ -668,23 +668,108 @@ function handlePhotoClick(el) {
   }
 }
 
+// ── Optimized DOM update for photo selection (no full re-render) ──
+function _updatePhotoItemDOM(el, photoId, projectId) {
+  const isSelected = SelectionState.isSelected(photoId);
+  const isAuto = SelectionState.isAutoSuggested(photoId);
+
+  // Toggle selected class
+  el.classList.toggle('selected', isSelected);
+
+  // Update auto badge visibility
+  const badge = el.querySelector('.photo-badge-auto');
+  if (badge) {
+    badge.style.display = (isAuto && !isSelected) ? '' : 'none';
+  }
+
+  // Update counter in toolbar
+  const selCount = SelectionState.totalSelected();
+  const counterEl = document.querySelector('.selection-counter');
+  const filterTabSel = document.querySelector('.filter-tab[onclick*="selected"] .count');
+  if (filterTabSel) filterTabSel.textContent = selCount;
+
+  if (selCount > 0) {
+    if (!counterEl) {
+      // Insert counter next to filter tabs
+      const toolbarLeft = document.querySelector('.toolbar-left');
+      if (toolbarLeft) {
+        const div = document.createElement('div');
+        div.className = 'selection-counter';
+        div.innerHTML = `<div class="counter-dot"></div> ${selCount} selected`;
+        toolbarLeft.appendChild(div);
+      }
+    } else {
+      counterEl.innerHTML = `<div class="counter-dot"></div> ${selCount} selected`;
+    }
+  } else {
+    if (counterEl) counterEl.remove();
+  }
+
+  // Update bulk bar
+  const bulkBar = document.getElementById('bulk-bar');
+  if (bulkBar) {
+    bulkBar.classList.toggle('show', selCount > 0);
+    const infoSpan = bulkBar.querySelector('.bulk-info span');
+    if (infoSpan) infoSpan.textContent = selCount;
+  }
+}
+
 function togglePhotoSelect(photoId, projectId) {
   SelectionState.toggleSelect(photoId);
-  renderProject(projectId);
+  const el = document.querySelector(`.photo-item[data-id="${photoId}"]`);
+  if (el) _updatePhotoItemDOM(el, photoId, projectId);
+  else renderProject(projectId);
 }
 
 function togglePhotoLike(photoId, projectId) {
   SelectionState.toggleLike(photoId);
   const isLiked = SelectionState.isLiked(photoId);
   Toast.show(isLiked ? '❤️ Photo liked!' : 'Like removed', isLiked ? 'success' : 'info', 1500);
-  renderProject(projectId);
+
+  // Update heart button DOM instantly
+  const el = document.querySelector(`.photo-item[data-id="${photoId}"]`);
+  if (el) {
+    const heartBtn = el.querySelector('.photo-heart');
+    if (heartBtn) {
+      heartBtn.className = `photo-heart ${isLiked ? 'liked' : ''}`;
+      heartBtn.textContent = isLiked ? '❤️' : '🤍';
+    }
+    // Also update selection visuals
+    _updatePhotoItemDOM(el, photoId, projectId);
+
+    // Update liked count tab
+    const likedCount = [...SelectionState.liked].length;
+    const likeTab = document.querySelector('.filter-tab[onclick*="liked"] .count');
+    if (likeTab) likeTab.textContent = likedCount;
+  } else {
+    renderProject(projectId);
+  }
 }
 
 function togglePhotoLock(photoId, projectId) {
   SelectionState.toggleLock(photoId);
   const isLocked = SelectionState.isLocked(photoId);
   Toast.show(isLocked ? '🔒 Photo locked' : '🔓 Photo unlocked', 'info', 1500);
-  renderProject(projectId);
+  // Lock changes state visibility — just re-render lock icon area
+  const el = document.querySelector(`.photo-item[data-id="${photoId}"]`);
+  if (el) {
+    let lockEl = el.querySelector('.photo-lock');
+    if (isLocked) {
+      if (!lockEl) {
+        lockEl = document.createElement('div');
+        lockEl.className = 'photo-lock';
+        lockEl.title = 'Locked';
+        lockEl.onclick = (e) => { e.stopPropagation(); togglePhotoLock(photoId, projectId); };
+        el.appendChild(lockEl);
+      }
+      lockEl.textContent = '🔒';
+      lockEl.style.opacity = '1';
+    } else {
+      if (lockEl) lockEl.remove();
+    }
+  } else {
+    renderProject(projectId);
+  }
 }
 
 function setFilter(filter, projectId) {
@@ -856,28 +941,7 @@ async function addPhotosToProject(projectId) {
     const imageTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
     const files = Array.from(input.files).filter(f => imageTypes.includes(f.type));
     if (files.length === 0) { Toast.show('No images found', 'error'); return; }
-
-    const existing = Store.getPhotos(projectId);
-    const newMeta = files.map(f => ({ id: uuid(), name: f.name, size: f.size, type: f.type, path: f.webkitRelativePath || f.name }));
-
-    Toast.show(`Adding ${newMeta.length} photos...`, 'info', 2000);
-
-    // Convert to data URLs and persist
-    const dataUrls = {};
-    const promises = files.map(async (f, i) => {
-      const dataUrl = await fileToDataUrl(f);
-      dataUrls[newMeta[i].id] = dataUrl;
-    });
-    await Promise.all(promises);
-
-    if (!PhotoCache[projectId]) PhotoCache[projectId] = {};
-    Object.assign(PhotoCache[projectId], dataUrls);
-    await PhotoDB.savePhotoBatch(projectId, dataUrls);
-
-    Store.savePhotos(projectId, [...existing, ...newMeta]);
-    Store.update(projectId, { photoCount: existing.length + newMeta.length });
-    Toast.show(`${newMeta.length} photos added!`, 'success');
-    renderProject(projectId);
+    promptGoogleDriveSync(projectId, files);
   };
   input.click();
 }
@@ -956,13 +1020,13 @@ async function addFilesToProject(projectId) {
     const imageTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
     const files = Array.from(input.files).filter(f => imageTypes.includes(f.type));
     if (files.length === 0) { Toast.show('No images found', 'error'); return; }
-    await processAndAddFiles(projectId, files);
+    promptGoogleDriveSync(projectId, files);
   };
   input.click();
 }
 
 // ── Shared file processing for both addFiles and drag-drop ──
-async function processAndAddFiles(projectId, files) {
+async function processAndAddFiles(projectId, files, syncToDrive = false) {
   const newMeta = files.map(f => ({ id: uuid(), name: f.name, size: f.size, type: f.type, path: f.webkitRelativePath || f.name }));
   Toast.show(`Adding ${newMeta.length} photos in batches...`, 'info', 2000);
 
@@ -986,14 +1050,16 @@ async function processAndAddFiles(projectId, files) {
     await PhotoDB.savePhotoBatch(projectId, batchUrls);
 
     // Sync to Drive
-    try {
-      const project = Store.get(projectId);
-      CloudUploader.add(projectId, project.name, batchMeta.map(pm => ({
-        id: pm.id,
-        name: pm.name,
-        dataUrl: batchUrls[pm.id]
-      })));
-    } catch (e) { }
+    if (syncToDrive && typeof CloudUploader !== 'undefined') {
+      try {
+        const project = Store.get(projectId);
+        CloudUploader.add(projectId, project.name, batchMeta.map(pm => ({
+          id: pm.id,
+          name: pm.name,
+          dataUrl: batchUrls[pm.id]
+        })));
+      } catch (e) { }
+    }
 
     // Update thumbnail if project had none and this is the first batch
     const projectProps = {};
@@ -1082,7 +1148,27 @@ function handleProjectDrop(projectId, fileList) {
   const imageTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
   const files = Array.from(fileList).filter(f => imageTypes.includes(f.type));
   if (files.length === 0) { Toast.show('No image files found', 'error'); return; }
-  processAndAddFiles(projectId, files);
+  promptGoogleDriveSync(projectId, files);
+}
+
+function promptGoogleDriveSync(projectId, files) {
+  if (!SettingsState.gasUrl || typeof CloudUploader === 'undefined') {
+    processAndAddFiles(projectId, files, false);
+    return;
+  }
+  Swal.fire({
+    title: '☁️ Cloud Sync',
+    text: `Backup ${files.length} foto ini ke Google Drive otomatis?`,
+    icon: 'question',
+    showCancelButton: true,
+    confirmButtonText: 'Ya, Backup',
+    cancelButtonText: 'Tidak, Lokal Saja',
+    confirmButtonColor: 'var(--primary)',
+    cancelButtonColor: '#6b7280',
+    reverseButtons: true
+  }).then(result => {
+    processAndAddFiles(projectId, files, result.isConfirmed);
+  });
 }
 
 function _onDragEnter(e) {
@@ -1432,7 +1518,7 @@ async function renderIGBuilder() {
         <select class="btn btn-ghost" onchange="switchIGProject(this.value)" style="padding:0.5rem 1rem;background:var(--bg-glass);border:1px solid var(--border-glass);color:var(--text-primary);border-radius:var(--radius-xs);">
           ${projects.map(p => `<option value="${p.id}" ${p.id === IGBuilderState.projectId ? 'selected' : ''}>${p.name}</option>`).join('')}
         </select>
-        <button class="btn btn-primary" onclick="IGBuilderState.addSlide();renderIGBuilder();">+ Add Slide</button>
+        <button class="btn btn-primary" onclick="IGBuilderState.addSlide();renderIGSlides();">+ Add Slide</button>
         <button class="btn btn-primary" onclick="batchExportIGSlides()" style="background:var(--success);">📥 Export All</button>
       </div>
     </div>
@@ -1464,7 +1550,17 @@ async function renderIGBuilder() {
     }
   }
 
+  // Initially render slides and pool dynamically
+  renderIGSlides();
+}
+
+function renderIGPhotoPool() {
+  const container = document.getElementById('ig-photo-pool');
+  if (!container) return;
+
+  const photos = Store.getPhotos(IGBuilderState.projectId);
   SelectionState.load(IGBuilderState.projectId);
+  
   let poolPhotos = photos;
   if (SelectionState.selected.size > 0) {
     poolPhotos = photos.filter(p => SelectionState.isSelected(p.id));
@@ -1472,22 +1568,28 @@ async function renderIGBuilder() {
     poolPhotos = photos.filter(p => SelectionState.isAutoSuggested(p.id));
   }
 
+  // Sembunyikan foto yang sudah dipakai
+  const usedIds = new Set();
+  IGBuilderState.slides.forEach(slide => {
+    if (slide.topId) usedIds.add(slide.topId);
+    if (slide.layout !== 'single' && slide.bottomId) usedIds.add(slide.bottomId);
+  });
+  
+  poolPhotos = poolPhotos.filter(p => !usedIds.has(p.id));
+
   const poolHtml = poolPhotos.map(p => {
     const url = PhotoCache[IGBuilderState.projectId] ? PhotoCache[IGBuilderState.projectId][p.id] : null;
     const isActive = IGBuilderState.activePhotoId === p.id;
     return `
-  <div class="photo-item ${isActive ? 'selected' : ''}" style="${isActive ? 'border-color:var(--primary); box-shadow: 0 0 0 2px var(--primary);' : ''}" draggable="true" ondragstart="igDragStart(event, '${p.id}')" onclick="igPhotoClick('${p.id}')">
-    ${url ? `<img src="${url}" alt="${p.name}">` : `<div style="padding:1rem;">🖼️</div>`}
-<div class="photo-name" style="font-size:0.55rem;padding:0.25rem;">${p.name}</div>
+      <div class="photo-item ${isActive ? 'selected' : ''}" style="${isActive ? 'border-color:var(--primary); box-shadow: 0 0 0 2px var(--primary);' : ''}" draggable="true" ondragstart="igDragStart(event, '${p.id}')" onclick="igPhotoClick('${p.id}')">
+        ${url ? `<img src="${url}" alt="${p.name}">` : `<div style="padding:1rem;">🖼️</div>`}
+        <div class="photo-name" style="font-size:0.55rem;padding:0.25rem;">${p.name}</div>
       </div>
-  `;
+    `;
   }).join('');
 
-  document.getElementById('ig-photo-pool').innerHTML = poolHtml || `<div style = "grid-column:1/-1;text-align:center;font-size:0.8rem;color:var(--text-muted);padding:2rem 0;"> No photos mapped.Ensure you've imported photos first.</div>`;
-
-  renderIGSlides();
+  container.innerHTML = poolHtml || `<div style="grid-column:1/-1;text-align:center;font-size:0.8rem;color:var(--text-muted);padding:2rem 0;">Semua foto yang direkomendasikan sudah masuk ke Grid! 🎉</div>`;
 }
-
 function switchIGProject(projectId) {
   IGBuilderState.projectId = projectId;
   renderIGBuilder();
@@ -1505,7 +1607,14 @@ function renderIGSlides() {
     const slideAspectRatio = IGBuilderState.format === '9:16' ? '1080 / 1920' : '1080 / 1350';
 
     return `
-      <div class="slide-wrap">
+      <div class="slide-wrap" draggable="true" ondragstart="igSlideDragStart(event, ${idx})" ondragend="igSlideDragEnd(event)" ondragover="igSlideDragOver(event)" ondragleave="igSlideDragLeave(event)" ondrop="igSlideDrop(event, ${idx})" style="transition: transform 0.2s, box-shadow 0.2s; cursor: grab;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.25rem;">
+          <div class="slide-badge" style="background:rgba(255,255,255,0.05); padding:0.3rem 0.75rem; border-radius:12px; font-size:0.75rem; font-weight:700; color:var(--text-secondary); border:1px solid var(--border-glass);">
+            ${idx + 1} / ${IGBuilderState.slides.length}
+          </div>
+          <div style="font-size:0.75rem; color:var(--text-muted); opacity:0.6;"><i class="fa-solid fa-grip-lines"></i> Geser</div>
+        </div>
+
         <div class="slide-card layout-${slide.layout}" id="ig-slide-${slide.id}" style="aspect-ratio: ${slideAspectRatio};">
           <div class="slide-slot ${topUrl ? 'has-photo' : ''}" 
                ondragover="igDragOver(event)" ondragleave="igDragLeave(event)" ondrop="igDrop(event, '${slide.id}', 'topId')"
@@ -1513,11 +1622,16 @@ function renderIGSlides() {
                onwheel="${topUrl ? `igZoom(event, '${slide.id}', 'top')` : ''}"
                onmousedown="${topUrl ? `igPanStart(event, '${slide.id}', 'top')` : ''}">
             ${topUrl ? `
-              <img src="${topUrl}" id="img-${slide.id}-top" onload="igImageLoaded('${slide.id}', 'top')">
+              <img src="${topUrl}" id="img-${slide.id}-top" draggable="true" ondragstart="igSlotDragStart(event, '${slide.topId}', '${slide.id}', 'topId')" onload="igImageLoaded('${slide.id}', 'top')">
               <div class="slot-controls">
                 <button onclick="event.stopPropagation(); IGBuilderState.resetTransform('${slide.id}', 'top');renderIGSlides();">Reset</button>
               </div>
-            ` : 'Drop or Click Top Photo Here'}
+            ` : `
+            <div style="display:flex;flex-direction:column;align-items:center;gap:0.5rem;color:var(--text-muted);pointer-events:none;">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
+              <span style="font-size:0.7rem;font-weight:600;">Tarik Foto</span>
+            </div>
+            `}
           </div>
           <div class="slide-slot ${botUrl ? 'has-photo' : ''}"
                ondragover="igDragOver(event)" ondragleave="igDragLeave(event)" ondrop="igDrop(event, '${slide.id}', 'bottomId')"
@@ -1525,45 +1639,128 @@ function renderIGSlides() {
                onwheel="${botUrl ? `igZoom(event, '${slide.id}', 'bottom')` : ''}"
                onmousedown="${botUrl ? `igPanStart(event, '${slide.id}', 'bottom')` : ''}">
             ${botUrl ? `
-              <img src="${botUrl}" id="img-${slide.id}-bottom" onload="igImageLoaded('${slide.id}', 'bottom')">
+              <img src="${botUrl}" id="img-${slide.id}-bottom" draggable="true" ondragstart="igSlotDragStart(event, '${slide.bottomId}', '${slide.id}', 'bottomId')" onload="igImageLoaded('${slide.id}', 'bottom')">
               <div class="slot-controls">
                 <button onclick="event.stopPropagation(); IGBuilderState.resetTransform('${slide.id}', 'bottom');renderIGSlides();">Reset</button>
               </div>
-            ` : 'Drop or Click Bottom Photo Here'}
+            ` : `
+            <div style="display:flex;flex-direction:column;align-items:center;gap:0.5rem;color:var(--text-muted);pointer-events:none;">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
+              <span style="font-size:0.7rem;font-weight:600;">Tarik Foto</span>
+            </div>
+            `}
           </div>
         </div>
-        <div class="slide-actions">
-          <button class="btn btn-ghost btn-sm" onclick="IGBuilderState.toggleLayout('${slide.id}');renderIGSlides();">
-             ${slide.layout === 'split' ? '📄 Single' : '✂️ Split'}
+        
+        <div class="slide-actions" style="display:flex; gap:0.4rem; margin-top:0.25rem;">
+          <button class="format-btn ${slide.layout === 'split' ? 'active' : ''}" style="flex:1;" onclick="IGBuilderState.toggleLayout('${slide.id}');renderIGSlides();">
+             ${slide.layout === 'split' ? '✂️ Split' : '📄 Tunggal'}
           </button>
-          <button class="btn btn-ghost btn-sm" onclick="IGBuilderState.swapSlide('${slide.id}');renderIGSlides();" ${slide.layout === 'single' ? 'disabled' : ''}>⇅ Swap</button>
-          <button class="btn btn-primary btn-sm" onclick="exportIGSlide('${slide.id}', ${idx + 1})">📥 Export</button>
-          <button class="btn btn-danger btn-sm" onclick="IGBuilderState.removeSlide('${slide.id}');renderIGSlides();">🗑️</button>
+          <button class="format-btn" style="flex:1; ${slide.layout === 'single' ? 'opacity:0.4;cursor:not-allowed;' : ''}" onclick="IGBuilderState.swapSlide('${slide.id}');renderIGSlides();" ${slide.layout === 'single' ? 'disabled' : ''}>
+            ⇅ Tukar
+          </button>
+          <button class="format-btn" style="flex:none; width:36px; border-color:rgba(16,185,129,0.3); color:var(--success);" onclick="exportIGSlide('${slide.id}', ${idx + 1})" title="Export Slide">
+            📥
+          </button>
+          <button class="format-btn" style="flex:none; width:36px; border-color:rgba(239,68,68,0.3); color:var(--danger);" onclick="IGBuilderState.removeSlide('${slide.id}');renderIGSlides();" title="Hapus Slide">
+            🗑️
+          </button>
         </div>
       </div>
     `;
   }).join('');
+
+  // Sinkronisasi pool untuk hilangkan foto yang sudah dipakai
+  renderIGPhotoPool();
 }
 
 function igDragStart(e, photoId) {
-  e.dataTransfer.setData('text/plain', photoId);
-  e.dataTransfer.effectAllowed = 'copy';
+  e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'pool', photoId }));
+  e.dataTransfer.effectAllowed = 'copyMove';
 }
+
+function igSlotDragStart(e, photoId, slideId, slotPrefix) {
+  e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'slot', photoId, slideId, slotPrefix }));
+  e.dataTransfer.effectAllowed = 'move';
+}
+
+function igSlideDragStart(e, index) {
+  e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'slide', index }));
+  e.dataTransfer.effectAllowed = 'move';
+  e.stopPropagation();
+  setTimeout(() => e.target.style.opacity = '0.4', 0);
+}
+
+function igSlideDragEnd(e) {
+  e.target.style.opacity = '1';
+}
+
+function igSlideDragOver(e) {
+  e.preventDefault();
+  e.currentTarget.style.transform = 'scale(1.02)';
+  e.currentTarget.style.borderLeft = '4px solid var(--primary)';
+}
+
+function igSlideDragLeave(e) {
+  e.currentTarget.style.transform = '';
+  e.currentTarget.style.borderLeft = '';
+}
+
+function igSlideDrop(e, targetIndex) {
+  e.preventDefault();
+  e.stopPropagation();
+  e.currentTarget.style.transform = '';
+  e.currentTarget.style.borderLeft = '';
+  
+  try {
+    const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+    if (data.type === 'slide') {
+      const sourceIndex = data.index;
+      if (typeof sourceIndex === 'number' && sourceIndex !== targetIndex) {
+        const item = IGBuilderState.slides.splice(sourceIndex, 1)[0];
+        let newTargetIndex = targetIndex;
+        if (sourceIndex < targetIndex) newTargetIndex--;
+        IGBuilderState.slides.splice(newTargetIndex, 0, item);
+        IGBuilderState.save();
+        renderIGSlides();
+      }
+    }
+  } catch(err) {}
+}
+
 function igDragOver(e) {
   e.preventDefault();
+  e.stopPropagation();
   e.dataTransfer.dropEffect = 'copy';
   e.currentTarget.classList.add('drag-over');
 }
+
 function igDragLeave(e) {
   e.currentTarget.classList.remove('drag-over');
 }
+
 function igDrop(e, slideId, slot) {
   e.preventDefault();
+  e.stopPropagation();
   e.currentTarget.classList.remove('drag-over');
-  const photoId = e.dataTransfer.getData('text/plain');
-  if (photoId) {
-    IGBuilderState.updateSlide(slideId, slot, photoId);
-    renderIGSlides();
+  try {
+    const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+    if (data.type === 'pool') {
+      IGBuilderState.updateSlide(slideId, slot, data.photoId);
+      renderIGSlides();
+    } else if (data.type === 'slot') {
+      IGBuilderState.updateSlide(slideId, slot, data.photoId);
+      if (data.slideId !== slideId || data.slotPrefix !== slot) {
+        IGBuilderState.updateSlide(data.slideId, data.slotPrefix, null);
+      }
+      renderIGSlides();
+    }
+  } catch (err) {
+    const photoId = e.dataTransfer.getData('text/plain');
+    if (photoId && !photoId.startsWith('{')) {
+      IGBuilderState.updateSlide(slideId, slot, photoId);
+      renderIGSlides();
+    }
   }
 }
 
@@ -1573,7 +1770,7 @@ function igPhotoClick(photoId) {
   } else {
     IGBuilderState.activePhotoId = photoId;
   }
-  renderIGBuilder();
+  renderIGPhotoPool();
 }
 
 function igSlotClick(slideId, slotPrefix) {
@@ -1749,9 +1946,14 @@ const BrandingState = {
   tab: 'library', // 'library' or 'editor'
   logos: JSON.parse(localStorage.getItem('boda_branding_logos') || '[]'),
   selectedLogoIndex: parseInt(localStorage.getItem('boda_branding_selected_logo') || '0', 10),
-  position: localStorage.getItem('boda_branding_pos') || 'wm-br', // Default bottom-right
-  size: parseInt(localStorage.getItem('boda_branding_size') || '30', 10), // Percentage
-  opacity: parseInt(localStorage.getItem('boda_branding_opacity') || '80', 10), // Percentage
+  position: localStorage.getItem('boda_branding_pos') || 'wm-br',
+  size: parseInt(localStorage.getItem('boda_branding_size') || '30', 10),
+  opacity: parseInt(localStorage.getItem('boda_branding_opacity') || '80', 10),
+
+  // ── MULTI-TEXT LAYERS ──
+  titleEnabled: localStorage.getItem('boda_title_enabled') !== 'false',
+  texts: JSON.parse(localStorage.getItem('boda_texts') || '[]'),
+  activeTextIndex: 0,
 
   setTab(tab) {
     this.tab = tab;
@@ -1762,6 +1964,49 @@ const BrandingState = {
     return this.logos[this.selectedLogoIndex] || null;
   },
 
+  getActiveText() {
+    return this.texts[this.activeTextIndex];
+  },
+
+  updateActiveText(key, value) {
+    if (this.texts[this.activeTextIndex]) {
+      this.texts[this.activeTextIndex][key] = value;
+      this.saveState();
+    }
+  },
+
+  addTextLayer() {
+    this.texts.push({
+      id: "text_" + Date.now(),
+      text: 'Layer ' + (this.texts.length + 1),
+      font: 'Inter',
+      size: 32,
+      color: '#FFFFFF',
+      align: 'center',
+      position: 'bottom',
+      bg: 'rgba(0,0,0,0.45)',
+      weight: '700',
+      style: 'normal',
+      transform: 'none'
+    });
+    this.activeTextIndex = this.texts.length - 1;
+    this.saveState();
+  },
+
+  removeTextLayer(index) {
+    this.texts.splice(index, 1);
+    if (this.texts.length === 0) this.addTextLayer();
+    if (this.activeTextIndex >= this.texts.length) {
+      this.activeTextIndex = Math.max(0, this.texts.length - 1);
+    }
+    this.saveState();
+  },
+
+  setActiveTextIndex(idx) {
+    this.activeTextIndex = idx;
+    // We don't save active index to localStorage so it resets to 0 on reload.
+  },
+
   initMigrate() {
     if (this.logos.length === 0) {
       const old = localStorage.getItem('boda_branding_logo');
@@ -1770,6 +2015,32 @@ const BrandingState = {
         this.saveState();
         localStorage.removeItem('boda_branding_logo');
       }
+    }
+
+    // Migrate old single title to Multi-Text
+    if (this.texts.length === 0 && localStorage.getItem('boda_title_text')) {
+      this.texts.push({
+        id: "text_" + Date.now(),
+        text: localStorage.getItem('boda_title_text') || '',
+        font: localStorage.getItem('boda_title_font') || 'Inter',
+        size: parseInt(localStorage.getItem('boda_title_size') || '32', 10),
+        color: localStorage.getItem('boda_title_color') || '#FFFFFF',
+        align: localStorage.getItem('boda_title_align') || 'center',
+        position: localStorage.getItem('boda_title_pos') || 'bottom',
+        bg: localStorage.getItem('boda_title_bg') || 'rgba(0,0,0,0.45)',
+        weight: localStorage.getItem('boda_title_weight') || '700',
+        style: localStorage.getItem('boda_title_style') || 'normal',
+        transform: localStorage.getItem('boda_title_transform') || 'none',
+      });
+      this.saveState();
+      
+      // Cleanup legacy keys
+      const keysToRemove = ['text','font','size','color','align','pos','bg','weight','style','transform'];
+      keysToRemove.forEach(k => localStorage.removeItem('boda_title_' + k));
+    }
+
+    if (this.texts.length === 0) {
+      this.addTextLayer();
     }
   },
 
@@ -1784,6 +2055,10 @@ const BrandingState = {
     localStorage.setItem('boda_branding_pos', this.position);
     localStorage.setItem('boda_branding_size', this.size.toString());
     localStorage.setItem('boda_branding_opacity', this.opacity.toString());
+    
+    // Title Multi-Text State
+    localStorage.setItem('boda_title_enabled', this.titleEnabled.toString());
+    localStorage.setItem('boda_texts', JSON.stringify(this.texts));
   },
 
   addLogo(url) {
@@ -1808,6 +2083,9 @@ const BrandingState = {
 BrandingState.initMigrate();
 
 function renderBranding() {
+  const oldAside = document.querySelector('.branding-sidebar');
+  const scrollPos = oldAside ? oldAside.scrollTop : 0;
+
   const main = document.getElementById('main-content');
   const projects = Store.getAll();
 
@@ -1908,6 +2186,121 @@ function renderBranding() {
               <input type="range" min="0" max="100" value="${BrandingState.opacity}" oninput="updateBrandOpacity(this.value)">
             </div>
           ` : `<div style="padding:1rem;text-align:center;font-size:0.7rem;color:var(--text-muted);background:rgba(0,0,0,0.2);border-radius:4px;margin-top:1rem; cursor:pointer;" onclick="BrandingState.setTab('library')">Go to Logo Library to upload a logo.</div>`}
+
+          <!-- ── TITLE SLIDE PANEL (MULTI-TEXT) ── -->
+          <div style="margin-top:1.75rem; border-top:1px solid var(--border-glass); padding-top:1.25rem;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.75rem;">
+              <h4 style="font-size:0.85rem;color:var(--text-secondary);display:flex;align-items:center;gap:0.4rem;">
+                🏷️ Teks & Judul (Slide 1)
+              </h4>
+              <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer;font-size:0.75rem;color:var(--text-secondary);">
+                <input type="checkbox" id="title-toggle" ${BrandingState.titleEnabled ? 'checked' : ''} onchange="updateTitleEnabled(this.checked)" style="accent-color:var(--primary);width:14px;height:14px;">
+                Aktif
+              </label>
+            </div>
+            
+            <div id="title-panel" style="${BrandingState.titleEnabled ? '' : 'opacity:0.4;pointer-events:none;'} display:flex;flex-direction:column;gap:1.25rem;">
+              
+              <!-- Layer Navigation / Tabs -->
+              <div style="display:flex;flex-direction:column;gap:0.5rem;">
+                <div style="display:flex; gap:0.25rem; overflow-x:auto; padding-bottom:4px; scrollbar-width:none;">
+                  ${BrandingState.texts.map((t, i) => `
+                    <button class="btn btn-sm ${i === BrandingState.activeTextIndex ? 'btn-primary' : 'btn-ghost'}" onclick="BrandingState.setActiveTextIndex(${i});renderBranding();" style="flex:none; padding:0.35rem 0.6rem; font-size:0.7rem; border:1px solid ${i === BrandingState.activeTextIndex ? 'var(--primary)' : 'var(--border-glass)'};">
+                      Layer ${i + 1}
+                    </button>
+                  `).join('')}
+                  <button class="btn btn-sm btn-ghost" onclick="BrandingState.addTextLayer();renderBranding();" style="flex:none; padding:0.35rem 0.6rem; font-size:0.7rem; color:var(--success); border:1px dashed rgba(16,185,129,0.4);">
+                    + Tambah
+                  </button>
+                </div>
+              </div>
+
+              ${(() => {
+                const activeText = BrandingState.getActiveText();
+                if(!activeText) return '';
+                return `
+              <div style="display:flex;flex-direction:column;gap:1.25rem;">
+                  <!-- SECTION: KONTEN -->
+                  <div style="background:rgba(255,255,255,0.03); border:1px solid var(--border-glass); border-radius:var(--radius-sm); padding:1rem;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+                      <h5 style="font-size:0.75rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:1px;font-weight:700;margin:0;">✍️ Konten Layer ${BrandingState.activeTextIndex + 1}</h5>
+                      <button class="btn-ghost" style="color:var(--danger); font-size:0.75rem; padding:0.25rem; opacity:0.8;" onclick="BrandingState.removeTextLayer(${BrandingState.activeTextIndex});renderBranding();" title="Hapus Layer Ini">🗑️</button>
+                    </div>
+                    
+                    <div class="form-group" style="margin-bottom:0.75rem;">
+                      <textarea id="title-text-input" rows="2" placeholder="Teks..." oninput="updateTextProp('text', this.value)" style="width:100%;padding:0.75rem;background:var(--bg-deep);border:1px solid var(--border-glass);color:var(--text-primary);border-radius:var(--radius-sm);font-family:inherit;font-size:0.85rem;resize:vertical;outline:none;line-height:1.5;">${activeText.text}</textarea>
+                    </div>
+                    <div class="form-group">
+                      <select id="title-font-select" onchange="updateTextProp('font', this.value)" style="width:100%;padding:0.6rem 0.75rem;background:var(--bg-deep);border:1px solid var(--border-glass);color:var(--text-primary);border-radius:var(--radius-sm);font-family:inherit;font-size:0.8rem;outline:none;cursor:pointer;">
+                        ${['Inter','Playfair Display','Montserrat','Raleway','Oswald','Lora','Pacifico','Dancing Script','Bebas Neue','Cinzel','Great Vibes','Josefin Sans','Poppins','Libre Baskerville','Nunito','Cherry Bomb One','Brown Sugar'].map(f =>
+                          `<option value="${f}" ${activeText.font === f ? 'selected' : ''}>${f}</option>`
+                        ).join('')}
+                      </select>
+                    </div>
+                  </div>
+
+                  <!-- SECTION: STYLE -->
+                  <div style="background:rgba(255,255,255,0.03); border:1px solid var(--border-glass); border-radius:var(--radius-sm); padding:1rem;">
+                    <h5 style="margin-bottom:0.75rem;font-size:0.75rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:1px;font-weight:700;">🎨 Format Visual</h5>
+                    
+                    <div style="display:grid;grid-template-columns:1fr;gap:0.75rem;">
+                      <div style="display:flex;align-items:center;gap:0.5rem;justify-content:space-between;">
+                        <label id="title-size-label" style="font-size:0.75rem;color:var(--text-secondary);margin:0;">Ukuran (${activeText.size}px)</label>
+                        <input type="range" min="10" max="150" value="${activeText.size}" oninput="updateTextProp('size', parseInt(this.value, 10)); document.getElementById('title-size-label').textContent = 'Ukuran ('+this.value+'px)';" style="width:120px;">
+                      </div>
+                      
+                      <div style="display:flex;align-items:center;gap:0.5rem;justify-content:space-between;">
+                        <label style="font-size:0.75rem;color:var(--text-secondary);margin:0;">Warna Teks</label>
+                        <input type="color" value="${activeText.color}" oninput="updateTextProp('color', this.value)" style="width:36px;height:24px;border:1px solid rgba(255,255,255,0.2);border-radius:4px;background:transparent;cursor:pointer;padding:0;">
+                      </div>
+                    </div>
+
+                    <div style="display:flex;gap:4px;margin-top:0.75rem;">
+                      <button class="format-btn ${activeText.weight==='700'?'active':''}" onclick="updateTextProp('weight', '${activeText.weight==='700'?'400':'700'}', true)" title="Bold">B</button>
+                      <button class="format-btn ${activeText.style==='italic'?'active':''}" onclick="updateTextProp('style', '${activeText.style==='italic'?'normal':'italic'}', true)" style="font-style:italic;" title="Italic">I</button>
+                      <button class="format-btn ${activeText.transform==='uppercase'?'active':''}" onclick="updateTextProp('transform', '${activeText.transform==='uppercase'?'none':'uppercase'}', true)" title="Uppercase">AA</button>
+                    </div>
+                  </div>
+
+                  <!-- SECTION: TATA LETAK -->
+                  <div style="background:rgba(255,255,255,0.03); border:1px solid var(--border-glass); border-radius:var(--radius-sm); padding:1rem;">
+                    <h5 style="margin-bottom:0.75rem;font-size:0.75rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:1px;font-weight:700;">📍 Tata Letak</h5>
+                    
+                    <div style="display:flex;flex-direction:column;gap:0.75rem;margin-bottom:0.75rem;">
+                      <div>
+                        <label style="font-size:0.7rem;color:var(--text-secondary);margin-bottom:4px;display:block;">Vertikal (Posisi)</label>
+                        <div style="display:flex;gap:2px;">
+                          <button class="format-btn ${activeText.position==='top'?'active':''}" onclick="updateTextProp('position', 'top', true)">Atas</button>
+                          <button class="format-btn ${activeText.position==='center'?'active':''}" onclick="updateTextProp('position', 'center', true)">Tgh</button>
+                          <button class="format-btn ${activeText.position==='bottom'?'active':''}" onclick="updateTextProp('position', 'bottom', true)">Bwh</button>
+                        </div>
+                      </div>
+                      <div>
+                        <label style="font-size:0.7rem;color:var(--text-secondary);margin-bottom:4px;display:block;">Horizontal (Rata)</label>
+                        <div style="display:flex;gap:2px;">
+                          <button class="format-btn ${activeText.align==='left'?'active':''}" onclick="updateTextProp('align', 'left', true)" style="font-size:0.9rem;">◀</button>
+                          <button class="format-btn ${activeText.align==='center'?'active':''}" onclick="updateTextProp('align', 'center', true)" style="font-size:0.9rem;">◼</button>
+                          <button class="format-btn ${activeText.align==='right'?'active':''}" onclick="updateTextProp('align', 'right', true)" style="font-size:0.9rem;">▶</button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="form-group">
+                      <label style="font-size:0.7rem;color:var(--text-secondary);margin-bottom:4px;display:block;">Latar Belakang Efek</label>
+                      <select onchange="updateTextProp('bg', this.value)" style="width:100%;padding:0.55rem;background:var(--bg-deep);border:1px solid var(--border-glass);color:var(--text-primary);border-radius:4px;font-size:0.75rem;outline:none;cursor:pointer;">
+                        <option value="transparent" ${activeText.bg==='transparent'?'selected':''}>Kosong (Seamless)</option>
+                        <option value="gradient" ${activeText.bg==='gradient'?'selected':''}>Gradient Fade</option>
+                        <option value="rgba(0,0,0,0.45)" ${activeText.bg==='rgba(0,0,0,0.45)'?'selected':''}>Hitam Soft</option>
+                        <option value="rgba(0,0,0,0.85)" ${activeText.bg==='rgba(0,0,0,0.85)'?'selected':''}>Hitam Gelap</option>
+                      </select>
+                    </div>
+                  </div>
+              </div>
+                `;
+              })()}
+            </div>
+          </div>
+          <!-- end title panel -->
           
         </aside>
         
@@ -1922,6 +2315,9 @@ function renderBranding() {
   </div>`;
 
   main.innerHTML = html;
+
+  const newAside = document.querySelector('.branding-sidebar');
+  if (newAside) newAside.scrollTop = scrollPos;
 
   const photos = Store.getPhotos(BrandingState.projectId);
   if (photos.length > 0 && !PhotoCache[BrandingState.projectId]) {
@@ -1983,6 +2379,115 @@ function updateBrandOpacity(val) {
   document.getElementById('brand-opacity-label').innerText = `Opacity (${val}%)`;
 }
 
+// ══════════════════════════════════════
+// Title Slide Functions
+// ══════════════════════════════════════
+function _loadGoogleFont(fontName) {
+  if (fontName === 'Brown Sugar') return;
+  const id = 'gf-' + fontName.replace(/\s+/g, '-');
+  if (!document.getElementById(id)) {
+    const link = document.createElement('link');
+    link.id = id;
+    link.rel = 'stylesheet';
+    link.href = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(fontName)}:wght@400;700&display=swap`;
+    document.head.appendChild(link);
+  }
+}
+
+function _updateTitleOverlayDOM() {
+  if (IGBuilderState.slides.length === 0) return;
+  const slideEl = document.getElementById('brand-slide-' + IGBuilderState.slides[0].id);
+  if (!slideEl) return;
+
+  let overlayContainer = slideEl.querySelector('.title-overlay-container');
+  
+  if (!BrandingState.titleEnabled || BrandingState.texts.length === 0) {
+    if (overlayContainer) overlayContainer.remove();
+    return;
+  }
+
+  if (!overlayContainer) {
+    overlayContainer = document.createElement('div');
+    overlayContainer.className = 'title-overlay-container';
+    overlayContainer.style.cssText = 'position:absolute; inset:0; z-index:30; pointer-events:none; overflow:hidden;';
+    slideEl.appendChild(overlayContainer);
+  } else {
+    overlayContainer.innerHTML = '';
+  }
+
+  BrandingState.texts.forEach(t => {
+    if (!t.text.trim()) return;
+    const safeFont = t.font.replace(/'/g, '');
+    _loadGoogleFont(t.font);
+
+    let posCss = '';
+    let bgCss = t.bg;
+    let padCss = '1.5rem 1.25rem';
+    let wrapperCss = 'position:absolute; left:0; right:0;';
+
+    if (t.position === 'top') {
+      wrapperCss += ' top:0;';
+      if (bgCss === 'gradient') {
+        bgCss = 'linear-gradient(to bottom, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.4) 60%, transparent 100%)';
+        padCss = '2rem 1.25rem 3rem 1.25rem';
+      }
+    } else if (t.position === 'bottom') {
+      wrapperCss += ' bottom:0;';
+      if (bgCss === 'gradient') {
+        bgCss = 'linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.4) 60%, transparent 100%)';
+        padCss = '3rem 1.25rem 2rem 1.25rem';
+      }
+    } else {
+      wrapperCss += ' top:50%; transform:translateY(-50%);';
+      if (bgCss === 'gradient') bgCss = 'radial-gradient(ellipse at center, rgba(0,0,0,0.75) 0%, transparent 70%)';
+    }
+
+    const layerDiv = document.createElement('div');
+    layerDiv.style.cssText = `
+      ${wrapperCss}
+      background:${bgCss};
+      padding: ${padCss};
+      text-align:${t.align};
+      pointer-events:none;
+    `;
+    layerDiv.innerHTML = `<div style="
+      font-family:'${safeFont}','Inter',sans-serif;
+      font-size:${t.size}px;
+      color:${t.color};
+      font-weight:${t.weight};
+      font-style:${t.style};
+      text-transform:${t.transform};
+      line-height:1.3;
+      letter-spacing:-0.01em;
+      word-break:break-word;
+      text-shadow:0 2px 8px rgba(0,0,0,0.6);
+    ">${t.text.replace(/\n/g, '<br>')}</div>`;
+    
+    overlayContainer.appendChild(layerDiv);
+  });
+}
+
+function updateTextProp(prop, val, renderForm = false) {
+  BrandingState.updateActiveText(prop, val);
+  if (renderForm) {
+    renderBranding();
+  } else {
+    _updateTitleOverlayDOM();
+  }
+}
+
+function updateTitleEnabled(val) {
+  BrandingState.titleEnabled = val;
+  BrandingState.saveState();
+  const panel = document.getElementById('title-panel');
+  if (panel) {
+    panel.style.opacity = val ? '1' : '0.4';
+    panel.style.pointerEvents = val ? 'auto' : 'none';
+  }
+  _updateTitleOverlayDOM();
+}
+
+
 window.brandDragStart = function(e, index) {
   e.dataTransfer.setData('text/plain', index);
   e.dataTransfer.effectAllowed = 'move';
@@ -2018,6 +2523,7 @@ function renderBrandingSlides() {
   container.innerHTML = IGBuilderState.slides.map((slide, idx) => {
     const topUrl = projectCache[slide.topId];
     const botUrl = projectCache[slide.bottomId];
+    const isFirstSlide = idx === 0;
 
     let watermarkHtml = '';
     if (BrandingState.logoUrl) {
@@ -2028,16 +2534,80 @@ function renderBrandingSlides() {
       `;
     }
 
+    // Title overlay: only on slide 1 if enabled
+    let titleHtml = '';
+    if (isFirstSlide && BrandingState.titleEnabled && BrandingState.texts.length > 0) {
+      let layerDivsHtml = BrandingState.texts.map(t => {
+        if (!t.text.trim()) return '';
+        const safeFont = t.font.replace(/'/g, '');
+        
+        let posCss = '';
+        let bgCss = t.bg;
+        let padCss = '1.5rem 1.25rem';
+        let wrapperCss = 'position:absolute; left:0; right:0;';
+
+        if (t.position === 'top') {
+          wrapperCss += ' top:0;';
+          if (bgCss === 'gradient') {
+            bgCss = 'linear-gradient(to bottom, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.4) 60%, transparent 100%)';
+            padCss = '2rem 1.25rem 3rem 1.25rem';
+          }
+        } else if (t.position === 'bottom') {
+          wrapperCss += ' bottom:0;';
+          if (bgCss === 'gradient') {
+            bgCss = 'linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.4) 60%, transparent 100%)';
+            padCss = '3rem 1.25rem 2rem 1.25rem';
+          }
+        } else {
+          wrapperCss += ' top:50%; transform:translateY(-50%);';
+          if (bgCss === 'gradient') bgCss = 'radial-gradient(ellipse at center, rgba(0,0,0,0.75) 0%, transparent 70%)';
+        }
+
+        return `
+          <div style="
+            ${wrapperCss}
+            background:${bgCss};
+            padding: ${padCss};
+            text-align:${t.align};
+            pointer-events:none;
+          ">
+            <div style="
+              font-family:'${safeFont}', 'Inter', sans-serif;
+              font-size:${t.size}px;
+              color:${t.color};
+              font-weight:${t.weight};
+              font-style:${t.style};
+              text-transform:${t.transform};
+              line-height:1.3;
+              letter-spacing:-0.01em;
+              word-break:break-word;
+              text-shadow: 0 2px 8px rgba(0,0,0,0.6);
+            ">${t.text.replace(/\n/g, '<br>')}</div>
+          </div>
+        `;
+      }).join('');
+      
+      if (layerDivsHtml) {
+        titleHtml = `
+          <div class="title-overlay-container" style="position:absolute; inset:0; z-index:30; pointer-events:none; overflow:hidden;">
+            ${layerDivsHtml}
+          </div>
+        `;
+      }
+    }
+
     const slideAspectRatio = IGBuilderState.format === '9:16' ? '1080 / 1920' : '1080 / 1350';
 
     return `
       <div class="slide-wrap" draggable="true" ondragstart="brandDragStart(event, ${idx})" ondragover="brandDragOver(event)" ondragleave="brandDragLeave(event)" ondrop="brandDrop(event, ${idx})" style="transition:all 0.2s;">
         <div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:0.5rem; display:flex; align-items:center; gap:0.5rem;">
-          <span style="background:rgba(255,255,255,0.1); padding:2px 6px; border-radius:4px; transform:scale(0.9); cursor:grab;">≡</span> 
+          <span style="background:rgba(255,255,255,0.1); padding:2px 6px; border-radius:4px; transform:scale(0.9); cursor:grab;">≡</span>
+          ${isFirstSlide ? '<span style="background:linear-gradient(90deg,#2563EB,#38BDF8);color:white;font-size:0.65rem;padding:2px 7px;border-radius:999px;font-weight:700;">🏷️ TITLE</span>' : ''}
           Slide ${idx + 1}
         </div>
         <div class="slide-card layout-${slide.layout}" id="brand-slide-${slide.id}" style="position:relative; aspect-ratio: ${slideAspectRatio};">
           ${watermarkHtml}
+          ${titleHtml}
           <div class="slide-slot ${topUrl ? 'has-photo' : ''}" style="cursor:default;">
             ${topUrl ? `
               <img src="${topUrl}" id="img-br-${slide.id}-top" onload="igImageLoadedBrand('${slide.id}', 'top')">
@@ -2553,6 +3123,11 @@ function toggleSidebar() {
 document.addEventListener('DOMContentLoaded', () => {
   Toast.init();
   SettingsState.load(); // Load global config from Firebase
+
+  // Preload title font if set
+  if (BrandingState.titleFont && BrandingState.titleFont !== 'Inter') {
+    _loadGoogleFont(BrandingState.titleFont);
+  }
 
   // Register routes
   Router.register('#dashboard', () => { renderDashboard(); });
