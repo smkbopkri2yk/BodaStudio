@@ -902,19 +902,19 @@ body {
 }
 
 .ig-slides-container {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2rem;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1.5rem;
+  align-items: start;
 }
 
 .slide-wrap {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  width: 320px;
+  width: 100%;
   background: var(--bg-glass);
-  padding: 1rem;
+  padding: 0.85rem;
   border-radius: var(--radius);
   border: 1px solid var(--border-glass);
 }
@@ -977,11 +977,11 @@ body {
 }
 
 /* ── Layout Toggle & Controls ── */
-.layout-single .slide-slot:last-child {
+.layout-single .slide-slot + .slide-slot {
   display: none !important;
 }
 
-.layout-single .slide-slot:first-child {
+.layout-single .slide-slot {
   flex: none;
   height: calc(100% - 8px);
 }
@@ -1409,6 +1409,38 @@ body {
   to {
     transform: scale(1);
   }
+}
+
+/* ── Title Overlay Animations ── */
+.title-overlay {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ── Format Toggle Buttons ── */
+.format-btn {
+  flex: 1;
+  padding: 0.35rem;
+  border-radius: 4px;
+  border: 1px solid var(--border-glass);
+  background: var(--bg-glass);
+  color: white;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 600;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.format-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.format-btn.active {
+  background: var(--primary);
+  border-color: var(--primary-light);
+  box-shadow: 0 2px 8px var(--primary-glow);
 }
 
 /* ── Heart Toggle ── */
