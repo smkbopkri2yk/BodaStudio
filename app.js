@@ -1,5 +1,20 @@
 // ============================================================================
 // ============================================================================
+
+// ── Global Error Handler (Early Catch) ──
+window.onerror = function(msg, url, line, col, error) {
+  const container = document.getElementById('main-content');
+  if (container && (!container.innerHTML || container.innerHTML === '')) {
+    container.innerHTML = `
+      <div style="padding:4rem 2rem; text-align:center; color:#ff4d4d; background:rgba(255,0,0,0.05); border-radius:12px; margin:2rem; border:1px solid rgba(255,0,0,0.2);">
+        <h2 style="margin-bottom:1rem;">⚠️ Application Error</h2>
+        <p style="opacity:0.8; font-size:0.9rem;">${msg}</p>
+        <button onclick="location.reload()" style="margin-top:1.5rem; padding:0.6rem 1.2rem; background:#ff4d4d; color:white; border:none; border-radius:6px; cursor:pointer;">Refresh Page</button>
+      </div>`;
+  }
+  return false;
+};
+
 // BODA STUDIO AI v2.0
 // Main Core Application
 // ============================================================================
@@ -62,7 +77,13 @@ const Store = {
   _photoCache: {},
 
   getAll() {
-    return JSON.parse(localStorage.getItem(this.KEY) || '[]');
+    try {
+      const data = JSON.parse(localStorage.getItem(this.KEY) || '[]');
+      return Array.isArray(data) ? data : [];
+    } catch(e) { 
+      console.error("Store.getAll error:", e);
+      return []; 
+    }
   },
   save(projects) {
     localStorage.setItem(this.KEY, JSON.stringify(projects));
@@ -2019,7 +2040,12 @@ async function batchExportIGSlides() {
 const BrandingState = {
   projectId: null,
   tab: 'library', // 'library' or 'editor'
-  logos: JSON.parse(localStorage.getItem('boda_branding_logos') || '[]'),
+  logos: (function() {
+    try { 
+      const d = JSON.parse(localStorage.getItem('boda_branding_logos') || '[]');
+      return Array.isArray(d) ? d : [];
+    } catch(e) { return []; }
+  })(),
   selectedLogoIndex: parseInt(localStorage.getItem('boda_branding_selected_logo') || '0', 10),
   position: localStorage.getItem('boda_branding_pos') || 'wm-br',
   size: parseInt(localStorage.getItem('boda_branding_size') || '30', 10),
@@ -2027,9 +2053,19 @@ const BrandingState = {
 
   // ── MULTI-TEXT LAYERS ──
   titleEnabled: localStorage.getItem('boda_title_enabled') !== 'false',
-  texts: JSON.parse(localStorage.getItem('boda_texts') || '[]'),
+  texts: (function() {
+    try { 
+      const d = JSON.parse(localStorage.getItem('boda_texts') || '[]');
+      return Array.isArray(d) ? d : [];
+    } catch(e) { return []; }
+  })(),
   activeTextIndex: 0,
-  customFonts: JSON.parse(localStorage.getItem('boda_custom_fonts') || '[]'),
+  customFonts: (function() {
+    try { 
+      const d = JSON.parse(localStorage.getItem('boda_custom_fonts') || '[]');
+      return Array.isArray(d) ? d : [];
+    } catch(e) { return []; }
+  })(),
 
   setTab(tab) {
     this.tab = tab;
@@ -3336,39 +3372,60 @@ window.stopTextDrag = function(e) {
 };
 
 // ── Initialize ──
-document.addEventListener('DOMContentLoaded', () => {
-  Toast.init();
-  SettingsState.load(); // Load global config from Firebase
+function initApp() {
+  if (window._bodaInitialized) return;
+  window._bodaInitialized = true;
 
-  // Preload title font if set
-  if (BrandingState.titleFont && BrandingState.titleFont !== 'Inter') {
-    _loadGoogleFont(BrandingState.titleFont);
+  try {
+    Toast.init();
+    SettingsState.load(); // Load global config from Firebase
+
+    // Preload title font if set
+    if (BrandingState.titleFont && BrandingState.titleFont !== 'Inter') {
+      _loadGoogleFont(BrandingState.titleFont);
+    }
+
+    // Register routes
+    Router.register('#dashboard', () => { renderDashboard(); });
+    Router.register('#project/:id', (id) => { renderProject(id); });
+    Router.register('#ig-builder', () => { renderIGBuilder(); });
+    Router.register('#branding', () => { renderBranding(); });
+    Router.register('#settings', () => { renderSettings(); });
+    Router.register('#linkboda', () => { renderLinkBoda(); });
+
+    Router.init();
+
+    // Close modal on overlay click
+    const modalOverlay = document.getElementById('modal-overlay');
+    if (modalOverlay) {
+      modalOverlay.addEventListener('click', e => {
+        if (e.target === e.currentTarget) closeModal();
+      });
+    }
+
+    // Close lightbox
+    const lightbox = document.getElementById('lightbox');
+    if (lightbox) {
+      lightbox.addEventListener('click', e => {
+        if (e.target === e.currentTarget) closeLightbox();
+      });
+    }
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { closeModal(); closeLightbox(); }
+    });
+    
+    console.log("Boda Studio AI initialized successfully.");
+  } catch (err) {
+    console.error("Critical Init Error:", err);
+    window.onerror(err.message, 'app.js', 0, 0, err);
   }
+}
 
-  // Register routes
-  Router.register('#dashboard', () => { renderDashboard(); });
-
-  Router.register('#project/:id', (id) => { renderProject(id); });
-  Router.register('#ig-builder', () => { renderIGBuilder(); });
-  Router.register('#branding', () => { renderBranding(); });
-  Router.register('#settings', () => { renderSettings(); });
-  Router.register('#linkboda', () => { renderLinkBoda(); });
-
-  Router.init();
-
-  // Close modal on overlay click
-  document.getElementById('modal-overlay').addEventListener('click', e => {
-    if (e.target === e.currentTarget) closeModal();
-  });
-
-  // Close lightbox
-  document.getElementById('lightbox').addEventListener('click', e => {
-    if (e.target === e.currentTarget) closeLightbox();
-  });
-
-  // Keyboard shortcuts
-  document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { closeModal(); closeLightbox(); }
-  });
-});
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initApp);
+} else {
+  initApp();
+}
 
