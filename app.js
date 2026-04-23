@@ -107,7 +107,8 @@ const PhotoCache = {};
 const PhotoDB = {
   DB_NAME: 'boda_photo_db',
   STORE_NAME: 'photos',
-  DB_VERSION: 1,
+  THUMB_STORE: 'thumbnails',
+  DB_VERSION: 2,
   _db: null,
 
   async open() {
@@ -119,6 +120,9 @@ const PhotoDB = {
         if (!db.objectStoreNames.contains(this.STORE_NAME)) {
           db.createObjectStore(this.STORE_NAME);
         }
+        if (!db.objectStoreNames.contains(this.THUMB_STORE)) {
+          db.createObjectStore(this.THUMB_STORE);
+        }
       };
       req.onsuccess = (e) => {
         this._db = e.target.result;
@@ -128,39 +132,42 @@ const PhotoDB = {
     });
   },
 
-  async savePhotoBatch(projectId, photoDataMap) {
+  async savePhotoBatch(projectId, photoDataMap, isThumb = false) {
     const db = await this.open();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(this.STORE_NAME, 'readwrite');
-      const store = tx.objectStore(this.STORE_NAME);
+      const storeName = isThumb ? this.THUMB_STORE : this.STORE_NAME;
+      const tx = db.transaction(storeName, 'readwrite');
+      const store = tx.objectStore(storeName);
       for (const [photoId, dataUrl] of Object.entries(photoDataMap)) {
-        store.put(dataUrl, `${projectId}_${photoId} `);
+        store.put(dataUrl, `${projectId}_${photoId}`);
       }
       tx.oncomplete = () => resolve();
       tx.onerror = (e) => reject(e.target.error);
     });
   },
 
-  async getPhoto(projectId, photoId) {
+  async getPhoto(projectId, photoId, isThumb = false) {
     const db = await this.open();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(this.STORE_NAME, 'readonly');
-      const req = tx.objectStore(this.STORE_NAME).get(`${projectId}_${photoId} `);
+      const storeName = isThumb ? this.THUMB_STORE : this.STORE_NAME;
+      const tx = db.transaction(storeName, 'readonly');
+      const req = tx.objectStore(storeName).get(`${projectId}_${photoId}`);
       req.onsuccess = () => resolve(req.result || null);
       req.onerror = (e) => reject(e.target.error);
     });
   },
 
-  async loadProjectPhotos(projectId, photoIds) {
+  async loadProjectPhotos(projectId, photoIds, isThumb = false) {
     const db = await this.open();
     const cache = {};
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(this.STORE_NAME, 'readonly');
-      const store = tx.objectStore(this.STORE_NAME);
+      const storeName = isThumb ? this.THUMB_STORE : this.STORE_NAME;
+      const tx = db.transaction(storeName, 'readonly');
+      const store = tx.objectStore(storeName);
       let completed = 0;
       if (photoIds.length === 0) { resolve(cache); return; }
       photoIds.forEach(pid => {
-        const req = store.get(`${projectId}_${pid} `);
+        const req = store.get(`${projectId}_${pid}`);
         req.onsuccess = () => {
           if (req.result) cache[pid] = req.result;
           completed++;
@@ -177,18 +184,21 @@ const PhotoDB = {
   async deleteProjectPhotos(projectId) {
     const db = await this.open();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(this.STORE_NAME, 'readwrite');
-      const store = tx.objectStore(this.STORE_NAME);
-      const req = store.openCursor();
-      req.onsuccess = (e) => {
-        const cursor = e.target.result;
-        if (cursor) {
-          if (typeof cursor.key === 'string' && cursor.key.startsWith(projectId + '_')) {
-            cursor.delete();
+      const stores = [this.STORE_NAME, this.THUMB_STORE];
+      const tx = db.transaction(stores, 'readwrite');
+      stores.forEach(sName => {
+        const store = tx.objectStore(sName);
+        const req = store.openCursor();
+        req.onsuccess = (e) => {
+          const cursor = e.target.result;
+          if (cursor) {
+            if (typeof cursor.key === 'string' && cursor.key.startsWith(projectId + '_')) {
+              cursor.delete();
+            }
+            cursor.continue();
           }
-          cursor.continue();
-        }
-      };
+        };
+      });
       tx.oncomplete = () => resolve();
       tx.onerror = (e) => reject(e.target.error);
     });
@@ -196,7 +206,7 @@ const PhotoDB = {
 };
 
 // ── Helper: File to compressed data URL ──
-function fileToDataUrl(file, maxSize = 2160) {
+function fileToDataUrl(file, maxSize = 2160, quality = 0.95) {
   return new Promise((resolve) => {
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -212,7 +222,7 @@ function fileToDataUrl(file, maxSize = 2160) {
         canvas.width = w;
         canvas.height = h;
         canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-        resolve(canvas.toDataURL('image/jpeg', 0.95));
+        resolve(canvas.toDataURL('image/jpeg', quality));
       };
       img.src = e.target.result;
     };
@@ -338,16 +348,25 @@ function renderEmptyState() {
 
 function renderProjectCards(projects) {
   return `<div class="projects-grid"> ${projects.map(p => {
-    const photos = Store.getPhotos(p.id);
-    const cache = PhotoCache[p.id] || {};
-    const thumbPhotos = photos.slice(0, 4);
-    const hasBlobs = thumbPhotos.some(ph => cache[ph.id]);
+    let thumbHtml = '<div class="thumb-placeholder">📁</div>';
+    if (p.thumbnailData) {
+      thumbHtml = `<img src="${p.thumbnailData}" alt="${p.name}">`;
+    } else {
+      // Only get photos if we need them for thumbnails
+      const photos = Store.getPhotos(p.id);
+      if (photos.length > 0) {
+        const cache = PhotoCache[p.id] || {};
+        const thumbPhotos = photos.slice(0, 4);
+        if (thumbPhotos.some(ph => cache[ph.id])) {
+          thumbHtml = `<div style="display:grid;grid-template-columns:1fr 1fr;width:100%;height:100%;">${thumbPhotos.map(ph => cache[ph.id] ? `<img src="${cache[ph.id]}" style="width:100%;height:100%;object-fit:cover;aspect-ratio:1;">` : '').join('')}</div>`;
+        }
+      }
+    }
+
     return `
     <div class="glass project-card" onclick="Router.navigate('#project/${p.id}')">
       <div class="card-thumb">
-        ${p.thumbnailData ? `<img src="${p.thumbnailData}" alt="${p.name}">`
-        : hasBlobs ? `<div style="display:grid;grid-template-columns:1fr 1fr;width:100%;height:100%;">${thumbPhotos.map(ph => cache[ph.id] ? `<img src="${cache[ph.id]}" style="width:100%;height:100%;object-fit:cover;">` : '').join('')}</div>`
-          : '<div class="thumb-placeholder">📁</div>'}
+        ${thumbHtml}
       </div>
       <div class="card-body">
         <h3>${p.name}</h3>
@@ -474,10 +493,12 @@ async function renderProject(id) {
 
   const photos = Store.getPhotos(id);
 
-  // Load from IndexedDB if not in memory cache
+  // Initial load of some thumbnails to keep things snappy
   if (!PhotoCache[id] || Object.keys(PhotoCache[id]).length === 0) {
     if (photos.length > 0) {
-      const cached = await PhotoDB.loadProjectPhotos(id, photos.map(p => p.id));
+      // Load first 100 thumbs immediately, others will be lazy loaded
+      const initialIds = photos.slice(0, 100).map(p => p.id);
+      const cached = await PhotoDB.loadProjectPhotos(id, initialIds, true);
       PhotoCache[id] = cached;
     }
   }
@@ -579,31 +600,11 @@ async function renderProject(id) {
         </div>
       </div>
 
-      <!-- Photo Grid -->
-      <div class="photo-grid">
-        ${filtered.map(p => {
-    const isSelected = SelectionState.isSelected(p.id);
-    const isLiked = SelectionState.isLiked(p.id);
-    const isAuto = SelectionState.isAutoSuggested(p.id);
-    const isLocked = SelectionState.isLocked(p.id);
-    const score = SelectionState.getScore(p.id);
-    return `
-          <div class="photo-item ${isSelected ? 'selected' : ''}" data-id="${p.id}" data-project="${id}" data-name="${p.name.replace(/"/g, '&quot;')}" data-size="${p.size}" data-type="${p.type}" onclick="handlePhotoClick(this)" oncontextmenu="showContextMenu(event,this)">
-            ${blobUrls[p.id]
-        ? `<img src="${blobUrls[p.id]}" alt="${p.name}" loading="lazy">`
-        : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:var(--bg-glass);font-size:2rem;opacity:0.2;">🖼️</div>`}
-            <button class="photo-heart ${isLiked ? 'liked' : ''}" onclick="event.stopPropagation();togglePhotoLike('${p.id}','${id}')" title="Like">
-              ${isLiked ? '❤️' : '🤍'}
-            </button>
-            ${isAuto && !isSelected ? `<div class="photo-badge-auto">⚡ AUTO</div>` : ''}
-            ${isLocked ? `<div class="photo-lock" onclick="event.stopPropagation();togglePhotoLock('${p.id}','${id}')" title="Locked">🔒</div>` : ''}
-            ${!isLocked && isSelected ? `<div class="photo-lock" onclick="event.stopPropagation();togglePhotoLock('${p.id}','${id}')" title="Lock selection" style="opacity:0;">🔓</div>` : ''}
-            <div class="photo-score" style="width:${score}%"></div>
-            <div class="photo-name">${p.name}</div>
-            <div class="photo-size">${formatSize(p.size)}</div>
-          </div>`;
-  }).join('')}
+      <!-- Photo Grid (Streaming/Chunked) -->
+      <div class="photo-grid" id="photo-grid-main">
+        <!-- Chunks injected here -->
       </div>
+    `}
     `}
 
     <!--Bulk Action Bar-->
@@ -615,17 +616,75 @@ async function renderProject(id) {
   </div>
   </div> `;
 
-  // Make lock buttons visible on hover via JS
-  document.querySelectorAll('.photo-item').forEach(item => {
-    const lockEl = item.querySelector('.photo-lock[style*="opacity:0"]');
-    if (lockEl) {
-      item.addEventListener('mouseenter', () => lockEl.style.opacity = '1');
-      item.addEventListener('mouseleave', () => lockEl.style.opacity = '0');
-    }
-  });
+  // Start streaming photos to grid
+  const grid = document.getElementById('photo-grid-main');
+  if (grid && filtered.length > 0) {
+    streamPhotosToGrid(grid, filtered, id);
+  }
 
   // Setup drag & drop on project view
   setupProjectDragDrop(id);
+}
+
+const PhotoObserver = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      const el = entry.target;
+      const id = el.dataset.id;
+      const pid = el.dataset.project;
+      if (!PhotoCache[pid] || !PhotoCache[pid][id]) {
+        PhotoDB.getPhoto(pid, id, true).then(thumb => {
+          if (thumb) {
+            if (!PhotoCache[pid]) PhotoCache[pid] = {};
+            PhotoCache[pid][id] = thumb;
+            const img = el.querySelector('img');
+            const placeholder = el.querySelector('.photo-placeholder');
+            if (img) { img.src = thumb; img.style.display = 'block'; }
+            if (placeholder) placeholder.remove();
+          }
+        });
+      }
+      PhotoObserver.unobserve(el);
+    }
+  });
+}, { rootMargin: '400px' });
+
+function streamPhotosToGrid(container, photos, projectId, batchSize = 40) {
+  let index = 0;
+  function renderNextBatch() {
+    const end = Math.min(index + batchSize, photos.length);
+    const batch = photos.slice(index, end);
+    const blobUrls = PhotoCache[projectId] || {};
+
+    const html = batch.map(p => {
+      const isSelected = SelectionState.isSelected(p.id);
+      const isLiked = SelectionState.isLiked(p.id);
+      const isAuto = SelectionState.isAutoSuggested(p.id);
+      const isLocked = SelectionState.isLocked(p.id);
+      const score = SelectionState.getScore(p.id);
+      const src = blobUrls[p.id] || '';
+      return `
+        <div class="photo-item ${isSelected ? 'selected' : ''}" data-id="${p.id}" data-project="${projectId}" data-name="${p.name.replace(/"/g, '&quot;')}" onclick="handlePhotoClick(this)" oncontextmenu="showContextMenu(event,this)">
+          <img src="${src}" alt="${p.name}" style="${!src ? 'display:none' : ''}">
+          ${!src ? '<div class="photo-placeholder">🖼️</div>' : ''}
+          <button class="photo-heart ${isLiked ? 'liked' : ''}" onclick="event.stopPropagation();togglePhotoLike('${p.id}','${projectId}')">${isLiked ? '❤️' : '🤍'}</button>
+          ${isAuto && !isSelected ? `<div class="photo-badge-auto">⚡ AUTO</div>` : ''}
+          ${isLocked ? `<div class="photo-lock" onclick="event.stopPropagation();togglePhotoLock('${p.id}','${projectId}')">🔒</div>` : ''}
+          <div class="photo-score" style="width:${score}%"></div>
+          <div class="photo-name">${p.name}</div>
+        </div>`;
+    }).join('');
+
+    const range = document.createRange();
+    const fragment = range.createContextualFragment(html);
+    fragment.querySelectorAll('.photo-item').forEach(item => {
+      if (!item.querySelector('img').src) PhotoObserver.observe(item);
+    });
+    container.appendChild(fragment);
+    index = end;
+    if (index < photos.length) requestAnimationFrame(renderNextBatch);
+  }
+  renderNextBatch();
 }
 
 // ── Click Handler: single=select, double=lightbox ──
@@ -649,22 +708,19 @@ function handlePhotoClick(el) {
     // Double click → open lightbox
     clearTimeout(_clickTimer);
     _clickCount = 0;
-    const cache = PhotoCache[projectId] || {};
-    const url = cache[photoId];
-    if (url) {
-      openLightbox(url, photoName);
-    } else {
-      // Try loading from IndexedDB
-      PhotoDB.getPhoto(projectId, photoId).then(dataUrl => {
-        if (dataUrl) {
-          if (!PhotoCache[projectId]) PhotoCache[projectId] = {};
-          PhotoCache[projectId][photoId] = dataUrl;
-          openLightbox(dataUrl, photoName);
-        } else {
-          Toast.show('Photo data not available', 'error');
-        }
-      });
-    }
+    
+    // 1. Show thumbnail immediately if available
+    const thumb = (PhotoCache[projectId] || {})[photoId];
+    if (thumb) openLightbox(thumb, photoName);
+
+    // 2. Fetch HD version from DB for best quality
+    PhotoDB.getPhoto(projectId, photoId, false).then(hdUrl => {
+      if (hdUrl) {
+        openLightbox(hdUrl, photoName);
+      } else if (!thumb) {
+        Toast.show('High-res photo not found', 'error');
+      }
+    });
   }
 }
 
@@ -883,7 +939,9 @@ async function runTrueAIAnalysis(projectId, photos) {
           const sizeBonus = Math.min(20, (p.size / 1024 / 1024) * 2);
           score += nameBonus + sizeBonus;
 
-          const dataUrl = cache[p.id];
+          let dataUrl = cache[p.id];
+          if (!dataUrl) dataUrl = await PhotoDB.getPhoto(projectId, p.id, true);
+
           if (dataUrl) {
             const img = new Image();
             await new Promise(res => { img.onload = res; img.src = dataUrl; });
@@ -1040,14 +1098,21 @@ async function processAndAddFiles(projectId, files, syncToDrive = false) {
     Toast.show(`Processing photos ${i + 1} to ${Math.min(i + BATCH_SIZE, files.length)} of ${files.length}...`, 'info', 1500);
 
     const batchUrls = {};
+    const batchThumbs = {};
     const promises = batchFiles.map(async (f, j) => {
-      const dataUrl = await fileToDataUrl(f);
-      batchUrls[batchMeta[j].id] = dataUrl;
+      const hdUrl = await fileToDataUrl(f, 2160, 0.9);
+      const thumbUrl = await fileToDataUrl(f, 320, 0.6); // Fast grid preview
+      batchUrls[batchMeta[j].id] = hdUrl;
+      batchThumbs[batchMeta[j].id] = thumbUrl;
     });
     await Promise.all(promises);
 
-    Object.assign(PhotoCache[projectId], batchUrls);
-    await PhotoDB.savePhotoBatch(projectId, batchUrls);
+    // Store only thumbnails in memory to keep memory usage low
+    if (!PhotoCache[projectId]) PhotoCache[projectId] = {};
+    Object.assign(PhotoCache[projectId], batchThumbs);
+
+    await PhotoDB.savePhotoBatch(projectId, batchUrls); // Save HD to persistent store
+    await PhotoDB.savePhotoBatch(projectId, batchThumbs, true); // Save Thumbs to persistent store
 
     // Sync to Drive
     if (syncToDrive && typeof CloudUploader !== 'undefined') {
@@ -1545,8 +1610,8 @@ async function renderIGBuilder() {
 
   const photos = Store.getPhotos(IGBuilderState.projectId);
   if (photos.length > 0) {
-    if (!PhotoCache[IGBuilderState.projectId]) {
-      PhotoCache[IGBuilderState.projectId] = await PhotoDB.loadProjectPhotos(IGBuilderState.projectId, photos.map(p => p.id));
+    if (!PhotoCache[IGBuilderState.projectId] || Object.keys(PhotoCache[IGBuilderState.projectId]).length < photos.length) {
+      PhotoCache[IGBuilderState.projectId] = await PhotoDB.loadProjectPhotos(IGBuilderState.projectId, photos.map(p => p.id), true);
     }
   }
 
@@ -1954,6 +2019,7 @@ const BrandingState = {
   titleEnabled: localStorage.getItem('boda_title_enabled') !== 'false',
   texts: JSON.parse(localStorage.getItem('boda_texts') || '[]'),
   activeTextIndex: 0,
+  customFonts: JSON.parse(localStorage.getItem('boda_custom_fonts') || '[]'),
 
   setTab(tab) {
     this.tab = tab;
@@ -1983,7 +2049,9 @@ const BrandingState = {
       size: 32,
       color: '#FFFFFF',
       align: 'center',
-      position: 'bottom',
+      position: 'bottom', // legacy
+      posX: 50,
+      posY: 80,
       bg: 'rgba(0,0,0,0.45)',
       weight: '700',
       style: 'normal',
@@ -2008,6 +2076,8 @@ const BrandingState = {
   },
 
   initMigrate() {
+    _injectCustomFonts(); // Ensure custom fonts are loaded
+
     if (this.logos.length === 0) {
       const old = localStorage.getItem('boda_branding_logo');
       if (old) {
@@ -2019,6 +2089,7 @@ const BrandingState = {
 
     // Migrate old single title to Multi-Text
     if (this.texts.length === 0 && localStorage.getItem('boda_title_text')) {
+      const legacyPos = localStorage.getItem('boda_title_pos') || 'bottom';
       this.texts.push({
         id: "text_" + Date.now(),
         text: localStorage.getItem('boda_title_text') || '',
@@ -2026,7 +2097,9 @@ const BrandingState = {
         size: parseInt(localStorage.getItem('boda_title_size') || '32', 10),
         color: localStorage.getItem('boda_title_color') || '#FFFFFF',
         align: localStorage.getItem('boda_title_align') || 'center',
-        position: localStorage.getItem('boda_title_pos') || 'bottom',
+        position: legacyPos, // legacy fallback
+        posX: 50,
+        posY: legacyPos === 'top' ? 10 : legacyPos === 'center' ? 50 : 90,
         bg: localStorage.getItem('boda_title_bg') || 'rgba(0,0,0,0.45)',
         weight: localStorage.getItem('boda_title_weight') || '700',
         style: localStorage.getItem('boda_title_style') || 'normal',
@@ -2042,6 +2115,17 @@ const BrandingState = {
     if (this.texts.length === 0) {
       this.addTextLayer();
     }
+    
+    // Normalize existing texts without posX/posY
+    let needsSave = false;
+    this.texts.forEach(t => {
+      if (t.posX === undefined || t.posY === undefined) {
+        t.posX = 50;
+        t.posY = (t.position === 'top') ? 10 : (t.position === 'center') ? 50 : 90;
+        needsSave = true;
+      }
+    });
+    if (needsSave) this.saveState();
   },
 
   saveState() {
@@ -2059,6 +2143,7 @@ const BrandingState = {
     // Title Multi-Text State
     localStorage.setItem('boda_title_enabled', this.titleEnabled.toString());
     localStorage.setItem('boda_texts', JSON.stringify(this.texts));
+    localStorage.setItem('boda_custom_fonts', JSON.stringify(this.customFonts));
   },
 
   addLogo(url) {
@@ -2230,12 +2315,16 @@ function renderBranding() {
                     <div class="form-group" style="margin-bottom:0.75rem;">
                       <textarea id="title-text-input" rows="2" placeholder="Teks..." oninput="updateTextProp('text', this.value)" style="width:100%;padding:0.75rem;background:var(--bg-deep);border:1px solid var(--border-glass);color:var(--text-primary);border-radius:var(--radius-sm);font-family:inherit;font-size:0.85rem;resize:vertical;outline:none;line-height:1.5;">${activeText.text}</textarea>
                     </div>
-                    <div class="form-group">
-                      <select id="title-font-select" onchange="updateTextProp('font', this.value)" style="width:100%;padding:0.6rem 0.75rem;background:var(--bg-deep);border:1px solid var(--border-glass);color:var(--text-primary);border-radius:var(--radius-sm);font-family:inherit;font-size:0.8rem;outline:none;cursor:pointer;">
-                        ${['Inter','Playfair Display','Montserrat','Raleway','Oswald','Lora','Pacifico','Dancing Script','Bebas Neue','Cinzel','Great Vibes','Josefin Sans','Poppins','Libre Baskerville','Nunito','Cherry Bomb One','Brown Sugar'].map(f =>
+                    <div class="form-group" style="display:flex;gap:0.5rem;align-items:center;">
+                      <select id="title-font-select" onchange="updateTextProp('font', this.value)" style="flex:1;padding:0.6rem 0.75rem;background:var(--bg-deep);border:1px solid var(--border-glass);color:var(--text-primary);border-radius:var(--radius-sm);font-family:inherit;font-size:0.8rem;outline:none;cursor:pointer;">
+                        ${['Inter','Playfair Display','Montserrat','Raleway','Oswald','Lora','Pacifico','Dancing Script','Bebas Neue','Cinzel','Great Vibes','Josefin Sans','Poppins','Libre Baskerville','Nunito','Cherry Bomb One','Brown Sugar'].concat(BrandingState.customFonts.map(f => f.name)).map(f =>
                           `<option value="${f}" ${activeText.font === f ? 'selected' : ''}>${f}</option>`
                         ).join('')}
                       </select>
+                      <label class="btn btn-ghost btn-sm" style="padding:0.6rem; margin:0; cursor:pointer;" title="Upload Custom Font (.TTF, .OTF, .WOFF)">
+                        <input type="file" accept=".ttf,.otf,.woff,.woff2" style="display:none;" onchange="handleFontUpload(event)">
+                        📤
+                      </label>
                     </div>
                   </div>
 
@@ -2267,12 +2356,19 @@ function renderBranding() {
                     <h5 style="margin-bottom:0.75rem;font-size:0.75rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:1px;font-weight:700;">📍 Tata Letak</h5>
                     
                     <div style="display:flex;flex-direction:column;gap:0.75rem;margin-bottom:0.75rem;">
-                      <div>
-                        <label style="font-size:0.7rem;color:var(--text-secondary);margin-bottom:4px;display:block;">Vertikal (Posisi)</label>
-                        <div style="display:flex;gap:2px;">
-                          <button class="format-btn ${activeText.position==='top'?'active':''}" onclick="updateTextProp('position', 'top', true)">Atas</button>
-                          <button class="format-btn ${activeText.position==='center'?'active':''}" onclick="updateTextProp('position', 'center', true)">Tgh</button>
-                          <button class="format-btn ${activeText.position==='bottom'?'active':''}" onclick="updateTextProp('position', 'bottom', true)">Bwh</button>
+                      <div style="background:rgba(56, 189, 248, 0.1); border:1px dashed var(--primary); padding:0.75rem; border-radius:4px;">
+                        <p style="margin:0; font-size:0.7rem; color:var(--text-secondary); text-align:center;">
+                           👆 Geser/Drag teks di atas Kanvas secara langsung. Atau atur X/Y:
+                        </p>
+                        <div style="display:flex;gap:0.5rem;margin-top:0.5rem;">
+                          <div style="flex:1;">
+                            <label style="font-size:0.6rem;color:var(--text-secondary);">Pos X (%)</label>
+                            <input type="number" min="0" max="100" value="${Math.round(activeText.posX !== undefined ? activeText.posX : 50)}" onchange="updateTextProp('posX', parseInt(this.value,10), true)" style="width:100%;padding:4px;background:var(--bg-deep);border:1px solid var(--border-glass);color:var(--text-primary);border-radius:4px;font-size:0.75rem;">
+                          </div>
+                          <div style="flex:1;">
+                            <label style="font-size:0.6rem;color:var(--text-secondary);">Pos Y (%)</label>
+                            <input type="number" min="0" max="100" value="${Math.round(activeText.posY !== undefined ? activeText.posY : 50)}" onchange="updateTextProp('posY', parseInt(this.value,10), true)" style="width:100%;padding:4px;background:var(--bg-deep);border:1px solid var(--border-glass);color:var(--text-primary);border-radius:4px;font-size:0.75rem;">
+                          </div>
                         </div>
                       </div>
                       <div>
@@ -2537,40 +2633,32 @@ function renderBrandingSlides() {
     // Title overlay: only on slide 1 if enabled
     let titleHtml = '';
     if (isFirstSlide && BrandingState.titleEnabled && BrandingState.texts.length > 0) {
-      let layerDivsHtml = BrandingState.texts.map(t => {
+      let layerDivsHtml = BrandingState.texts.map((t, i) => {
         if (!t.text.trim()) return '';
         const safeFont = t.font.replace(/'/g, '');
         
-        let posCss = '';
         let bgCss = t.bg;
         let padCss = '1.5rem 1.25rem';
-        let wrapperCss = 'position:absolute; left:0; right:0;';
-
-        if (t.position === 'top') {
-          wrapperCss += ' top:0;';
-          if (bgCss === 'gradient') {
-            bgCss = 'linear-gradient(to bottom, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.4) 60%, transparent 100%)';
-            padCss = '2rem 1.25rem 3rem 1.25rem';
-          }
-        } else if (t.position === 'bottom') {
-          wrapperCss += ' bottom:0;';
-          if (bgCss === 'gradient') {
-            bgCss = 'linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.4) 60%, transparent 100%)';
-            padCss = '3rem 1.25rem 2rem 1.25rem';
-          }
-        } else {
-          wrapperCss += ' top:50%; transform:translateY(-50%);';
-          if (bgCss === 'gradient') bgCss = 'radial-gradient(ellipse at center, rgba(0,0,0,0.75) 0%, transparent 70%)';
+        
+        if (bgCss === 'gradient') {
+           bgCss = 'radial-gradient(ellipse at center, rgba(0,0,0,0.75) 0%, transparent 70%)';
         }
+        
+        const wrapperCss = `position:absolute; left:${t.posX ?? 50}%; top:${t.posY ?? 50}%; transform:translate(-50%, -50%); width:100%;`;
 
         return `
-          <div style="
+          <div id="dragtext_${i}" style="
             ${wrapperCss}
             background:${bgCss};
             padding: ${padCss};
             text-align:${t.align};
-            pointer-events:none;
-          ">
+            pointer-events:auto;
+            cursor:grab;
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+            z-index:${50 + i};
+          " onpointerdown="startTextDrag(event, ${i})">
             <div style="
               font-family:'${safeFont}', 'Inter', sans-serif;
               font-size:${t.size}px;
@@ -3118,6 +3206,124 @@ function renderLinkBoda() {
 function toggleSidebar() {
   document.querySelector('.sidebar').classList.toggle('open');
 }
+
+// ══════════════════════════════════════
+// FONT & DRAG HANDLERS
+// ══════════════════════════════════════
+window.handleFontUpload = function(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    let fontName = file.name.split('.')[0];
+    fontName = fontName.replace(/[^a-zA-Z0-9]/g, ' '); // sanitize
+    const dataUrl = ev.target.result;
+    
+    // Check if custom font exists
+    if (!BrandingState.customFonts.find(f => f.name === fontName)) {
+      BrandingState.customFonts.push({ name: fontName, data: dataUrl });
+      BrandingState.saveState();
+      _injectCustomFonts();
+      if(window.Toast) Toast.show(`Font '${fontName}' berhasil diinstal!`, 'success');
+      
+      // Auto apply to current text
+      if (BrandingState.texts[BrandingState.activeTextIndex]) {
+        BrandingState.updateActiveText('font', fontName);
+      }
+      renderBranding();
+    }
+  };
+  reader.readAsDataURL(file);
+};
+
+window._injectCustomFonts = function() {
+  let styleEl = document.getElementById('boda-custom-fonts');
+  if (!styleEl) {
+    styleEl = document.createElement('style');
+    styleEl.id = 'boda-custom-fonts';
+    document.head.appendChild(styleEl);
+  }
+  styleEl.innerHTML = BrandingState.customFonts.map(f => 
+    `@font-face { font-family: "${f.name}"; src: url("${f.data}"); }`
+  ).join('\n');
+};
+
+let _dragActiveTextIdx = -1;
+let _dragStartX = 0;
+let _dragStartY = 0;
+let _dragInitPosX = 0;
+let _dragInitPosY = 0;
+
+window.startTextDrag = function(e, idx) {
+  e.preventDefault();
+  e.stopPropagation(); // prevent slide drag
+  _dragActiveTextIdx = idx;
+  
+  BrandingState.setActiveTextIndex(idx);
+  
+  // Highlight active tab visually without full DOM destruction
+  document.querySelectorAll('#title-panel .btn').forEach((btn, i) => {
+     if(i === idx) {
+       btn.classList.add('btn-primary');
+       btn.classList.remove('btn-ghost');
+       btn.style.border = '1px solid var(--primary)';
+     } else if (!btn.textContent.includes('Tambah')) {
+       btn.classList.remove('btn-primary');
+       btn.classList.add('btn-ghost');
+       btn.style.border = '1px solid var(--border-glass)';
+     }
+  });
+
+  _dragStartX = e.clientX;
+  _dragStartY = e.clientY;
+  
+  const textLayer = BrandingState.texts[idx];
+  _dragInitPosX = textLayer.posX || 50;
+  _dragInitPosY = textLayer.posY || 50;
+
+  document.addEventListener('pointermove', onTextDrag);
+  document.addEventListener('pointerup', stopTextDrag);
+  document.addEventListener('pointercancel', stopTextDrag);
+};
+
+window.onTextDrag = function(e) {
+  if (_dragActiveTextIdx === -1) return;
+  e.preventDefault(); // prevents pull-to-refresh
+  
+  const dx = e.clientX - _dragStartX;
+  const dy = e.clientY - _dragStartY;
+  
+  const container = document.querySelector('.title-overlay-container');
+  if (!container) return;
+  const rect = container.getBoundingClientRect();
+  
+  let pctX = _dragInitPosX + (dx / rect.width) * 100;
+  let pctY = _dragInitPosY + (dy / rect.height) * 100;
+  
+  // Clamp boundaries
+  pctX = Math.max(0, Math.min(100, pctX));
+  pctY = Math.max(0, Math.min(100, pctY));
+  
+  BrandingState.texts[_dragActiveTextIdx].posX = pctX;
+  BrandingState.texts[_dragActiveTextIdx].posY = pctY;
+  
+  const el = document.getElementById('dragtext_' + _dragActiveTextIdx);
+  if(el) {
+    el.style.left = pctX + '%';
+    el.style.top = pctY + '%';
+  }
+};
+
+window.stopTextDrag = function(e) {
+  if (_dragActiveTextIdx !== -1) {
+     BrandingState.saveState();
+     document.removeEventListener('pointermove', onTextDrag);
+     document.removeEventListener('pointerup', stopTextDrag);
+     document.removeEventListener('pointercancel', stopTextDrag);
+     _dragActiveTextIdx = -1;
+     renderBranding(); // Update form sliders and UI
+  }
+};
 
 // ── Initialize ──
 document.addEventListener('DOMContentLoaded', () => {
