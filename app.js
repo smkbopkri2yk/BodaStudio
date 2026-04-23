@@ -59,6 +59,7 @@ const Toast = {
 const Store = {
   KEY: 'boda_projects',
   PHOTO_KEY: 'boda_photos_',
+  _photoCache: {},
 
   getAll() {
     return JSON.parse(localStorage.getItem(this.KEY) || '[]');
@@ -91,11 +92,16 @@ const Store = {
   delete(id) {
     this.save(this.getAll().filter(p => p.id !== id));
     localStorage.removeItem(this.PHOTO_KEY + id);
+    delete this._photoCache[id];
   },
   getPhotos(projectId) {
-    return JSON.parse(localStorage.getItem(this.PHOTO_KEY + projectId) || '[]');
+    if (this._photoCache[projectId]) return this._photoCache[projectId];
+    const photos = JSON.parse(localStorage.getItem(this.PHOTO_KEY + projectId) || '[]');
+    this._photoCache[projectId] = photos;
+    return photos;
   },
   savePhotos(projectId, photos) {
+    this._photoCache[projectId] = photos;
     localStorage.setItem(this.PHOTO_KEY + projectId, JSON.stringify(photos));
   }
 };
@@ -403,7 +409,6 @@ function sortPhotos(photos, sortBy) {
   }
 }
 
-// ── Selection State ──
 const SelectionState = {
   projectId: null,
   selected: new Set(),
@@ -412,8 +417,12 @@ const SelectionState = {
   autoSuggested: new Set(),
   scores: {},
   filter: 'all',
+  _lastId: null,
+  _saveTimer: null,
 
   load(projectId) {
+    if (this._lastId === projectId) return;
+    this._lastId = projectId;
     this.projectId = projectId;
     const data = JSON.parse(localStorage.getItem('boda_selection_' + projectId) || '{}');
     this.selected = new Set(data.selected || []);
@@ -424,13 +433,17 @@ const SelectionState = {
     this.filter = 'all';
   },
   save() {
-    localStorage.setItem('boda_selection_' + this.projectId, JSON.stringify({
-      selected: [...this.selected],
-      liked: [...this.liked],
-      locked: [...this.locked],
-      autoSuggested: [...this.autoSuggested],
-      scores: this.scores
-    }));
+    if (this._saveTimer) clearTimeout(this._saveTimer);
+    this._saveTimer = setTimeout(() => {
+      if (!this.projectId) return;
+      localStorage.setItem('boda_selection_' + this.projectId, JSON.stringify({
+        selected: [...this.selected],
+        liked: [...this.liked],
+        locked: [...this.locked],
+        autoSuggested: [...this.autoSuggested],
+        scores: this.scores
+      }));
+    }, 800); // Increased debounce for large projects
   },
   toggleSelect(id) {
     if (this.selected.has(id)) this.selected.delete(id);
@@ -493,23 +506,11 @@ async function renderProject(id) {
 
   const photos = Store.getPhotos(id);
 
-  // Initial load of some thumbnails to keep things snappy
-  if (!PhotoCache[id] || Object.keys(PhotoCache[id]).length === 0) {
-    if (photos.length > 0) {
-      // Load first 100 thumbs immediately, others will be lazy loaded
-      const initialIds = photos.slice(0, 100).map(p => p.id);
-      const cached = await PhotoDB.loadProjectPhotos(id, initialIds, true);
-      PhotoCache[id] = cached;
-    }
-  }
-  const blobUrls = PhotoCache[id] || {};
-
-  // Load selection state
   SelectionState.load(id);
 
-  // Run auto-suggest if not yet done
+  // Defer auto-suggest to avoid blocking initial render
   if (photos.length > 0 && Object.keys(SelectionState.scores).length === 0) {
-    autoSuggestPhotos(photos);
+    setTimeout(() => autoSuggestPhotos(photos), 100);
   }
 
   // Filter photos
@@ -605,7 +606,6 @@ async function renderProject(id) {
         <!-- Chunks injected here -->
       </div>
     `}
-    `}
 
     <!--Bulk Action Bar-->
   <div class="bulk-bar ${selCount > 0 ? 'show' : ''}" id="bulk-bar">
@@ -633,14 +633,15 @@ const PhotoObserver = new IntersectionObserver((entries) => {
       const id = el.dataset.id;
       const pid = el.dataset.project;
       if (!PhotoCache[pid] || !PhotoCache[pid][id]) {
+        // Try Thumbnail first
         PhotoDB.getPhoto(pid, id, true).then(thumb => {
           if (thumb) {
-            if (!PhotoCache[pid]) PhotoCache[pid] = {};
-            PhotoCache[pid][id] = thumb;
-            const img = el.querySelector('img');
-            const placeholder = el.querySelector('.photo-placeholder');
-            if (img) { img.src = thumb; img.style.display = 'block'; }
-            if (placeholder) placeholder.remove();
+            _setPhotoItemImg(el, pid, id, thumb);
+          } else {
+            // Fallback to HD if thumb missing (legacy projects)
+            PhotoDB.getPhoto(pid, id, false).then(hd => {
+              if (hd) _setPhotoItemImg(el, pid, id, hd);
+            });
           }
         });
       }
@@ -648,6 +649,15 @@ const PhotoObserver = new IntersectionObserver((entries) => {
     }
   });
 }, { rootMargin: '400px' });
+
+function _setPhotoItemImg(el, pid, id, src) {
+  if (!PhotoCache[pid]) PhotoCache[pid] = {};
+  PhotoCache[pid][id] = src;
+  const img = el.querySelector('img');
+  const placeholder = el.querySelector('.photo-placeholder');
+  if (img) { img.src = src; img.style.display = 'block'; }
+  if (placeholder) placeholder.remove();
+}
 
 function streamPhotosToGrid(container, photos, projectId, batchSize = 40) {
   let index = 0;
