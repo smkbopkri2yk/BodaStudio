@@ -124,9 +124,16 @@
     </div>
 
     <!-- ──── Lightbox ──── -->
-    <div class="lightbox" id="lightbox" onclick="closeLightbox()">
-        <button class="close-lb" onclick="closeLightbox()">✕</button>
-        <img src="" alt="">
+    <div class="lightbox" id="lightbox">
+        <button class="download-lb" onclick="downloadLightboxPhoto()" title="Download Full Res">📥</button>
+        <button class="close-lb" onclick="closeLightbox()" title="Close">✕</button>
+        <div class="lb-nav lb-prev" onclick="prevLightboxPhoto(event)">‹</div>
+        <img id="lightbox-img" src="" alt="" onclick="event.stopPropagation()">
+        <div class="lb-nav lb-next" onclick="nextLightboxPhoto(event)">›</div>
+        <div class="histogram-container" onclick="event.stopPropagation()">
+            <div class="histogram-title">RGB Histogram</div>
+            <canvas id="histogram-canvas" width="256" height="100"></canvas>
+        </div>
     </div>
 
     <!-- ──── Drop Overlay ──── -->
