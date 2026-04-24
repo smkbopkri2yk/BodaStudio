@@ -1274,10 +1274,10 @@ body {
   object-fit: contain;
 }
 
-.lightbox .close-lb {
+.lightbox .close-lb,
+.lightbox .download-lb {
   position: absolute;
   top: 1.5rem;
-  right: 1.5rem;
   width: 40px;
   height: 40px;
   border-radius: 50%;
@@ -1289,6 +1289,71 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  z-index: 1510;
+  transition: all var(--transition);
+}
+
+.lightbox .close-lb { right: 1.5rem; }
+.lightbox .download-lb { right: 4.5rem; }
+
+.lightbox .close-lb:hover,
+.lightbox .download-lb:hover {
+  background: rgba(255, 255, 255, 0.3);
+  transform: scale(1.1);
+}
+
+.lightbox .lb-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 50px;
+  height: 50px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 50%;
+  color: #fff;
+  font-size: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 1510;
+  transition: all var(--transition);
+  user-select: none;
+}
+
+.lightbox .lb-nav:hover {
+  background: rgba(255, 255, 255, 0.3);
+  transform: translateY(-50%) scale(1.1);
+}
+
+.lightbox .lb-prev { left: 1.5rem; }
+.lightbox .lb-next { right: 1.5rem; }
+
+.histogram-container {
+  position: absolute;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem;
+  z-index: 1510;
+}
+
+.histogram-title {
+  font-size: 0.65rem;
+  color: rgba(255, 255, 255, 0.7);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 0.5rem;
+  font-weight: 700;
+}
+
+#histogram-canvas {
+  width: 256px;
+  height: 100px;
+  display: block;
 }
 
 /* ══════════════════════════════════════
