@@ -1725,15 +1725,41 @@ const IGLiveState = {
       if(window.Toast) Toast.show('Silakan aktifkan Live (QR Code) terlebih dahulu.', 'warning');
       return;
     }
-    Swal.fire({ title: 'Merender HD...', text: 'Mengirim kualitas tinggi ke HP Anda', allowOutsideClick: false, didOpen: () => Swal.showLoading()});
-    const slides = document.querySelectorAll('.ig-slide');
+    Swal.fire({ title: 'Merender HD...', text: 'Mengambil master foto resolusi tinggi...', allowOutsideClick: false, didOpen: () => Swal.showLoading()});
+    
     const renders = [];
-    for (const slide of slides) {
+    for (let i = 0; i < IGBuilderState.slides.length; i++) {
+      const slideData = IGBuilderState.slides[i];
+      const slideEl = document.getElementById('ig-slide-' + slideData.id);
+      if(!slideEl) continue;
+
+      const imgTop = slideEl.querySelector(`#img-${slideData.id}-top`);
+      const imgBot = slideEl.querySelector(`#img-${slideData.id}-bottom`);
+      const origTop = imgTop ? imgTop.src : '';
+      const origBot = imgBot ? imgBot.src : '';
+      
+      const promises = [];
+      if (imgTop && slideData.topId) {
+        promises.push(PhotoDB.getPhoto(IGBuilderState.projectId, slideData.topId, false).then(hd => {
+          if (hd) return new Promise(res => { imgTop.onload = res; imgTop.src = hd; });
+        }));
+      }
+      if (imgBot && slideData.bottomId) {
+        promises.push(PhotoDB.getPhoto(IGBuilderState.projectId, slideData.bottomId, false).then(hd => {
+          if (hd) return new Promise(res => { imgBot.onload = res; imgBot.src = hd; });
+        }));
+      }
+      await Promise.all(promises);
+
       try {
-        const canvas = await html2canvas(slide, { scale: 1.5, useCORS: true, logging: false });
+        const canvas = await html2canvas(slideEl, { scale: 1.5, useCORS: true, logging: false });
         renders.push(canvas.toDataURL('image/jpeg', 0.85));
       } catch(e) {}
+      
+      if (imgTop && origTop) imgTop.src = origTop;
+      if (imgBot && origBot) imgBot.src = origBot;
     }
+
     if (renders.length > 0) {
       fbRealtime.ref('ig_live_preview/' + this.sessionId).update({
         status: 'hd',
@@ -2280,9 +2306,28 @@ function igPanEnd() {
 
 async function exportIGSlide(slideId, index) {
   const el = document.getElementById('ig-slide-' + slideId);
-  if (!el) return;
+  const slideData = IGBuilderState.slides.find(s => s.id === slideId);
+  if (!el || !slideData) return;
 
-  Toast.show(`Exporting Slide ${index}...`, 'info', 2000);
+  Toast.show(`Memuat file HD untuk Slide ${index}...`, 'info', 2000);
+
+  const imgTop = el.querySelector(`#img-${slideData.id}-top`);
+  const imgBot = el.querySelector(`#img-${slideData.id}-bottom`);
+  const origTop = imgTop ? imgTop.src : '';
+  const origBot = imgBot ? imgBot.src : '';
+  
+  const promises = [];
+  if (imgTop && slideData.topId) {
+    promises.push(PhotoDB.getPhoto(IGBuilderState.projectId, slideData.topId, false).then(hd => {
+      if (hd) return new Promise(res => { imgTop.onload = res; imgTop.src = hd; });
+    }));
+  }
+  if (imgBot && slideData.bottomId) {
+    promises.push(PhotoDB.getPhoto(IGBuilderState.projectId, slideData.bottomId, false).then(hd => {
+      if (hd) return new Promise(res => { imgBot.onload = res; imgBot.src = hd; });
+    }));
+  }
+  await Promise.all(promises);
 
   try {
     const canvas = await html2canvas(el, {
@@ -2292,13 +2337,16 @@ async function exportIGSlide(slideId, index) {
     });
 
     const link = document.createElement('a');
-    link.download = `BodaStudio_Slide_${index}.jpg`;
+    link.download = `Photo.In_Slide_${index}.jpg`;
     link.href = canvas.toDataURL('image/jpeg', 0.95);
     link.click();
-    Toast.show(`Slide ${index} Exported!`, 'success');
+    Toast.show(`Slide ${index} Berhasil diexpor HD!`, 'success');
   } catch (err) {
     console.error(err);
     Toast.show('Export failed', 'error');
+  } finally {
+    if (imgTop && origTop) imgTop.src = origTop;
+    if (imgBot && origBot) imgBot.src = origBot;
   }
 }
 
@@ -3076,9 +3124,28 @@ function igImageLoadedBrand(slideId, slotPrefix) {
 
 async function exportBrandedSlide(slideId, index, customName = null) {
   const el = document.getElementById('brand-slide-' + slideId);
-  if (!el) return;
+  const slideData = IGBuilderState.slides.find(s => s.id === slideId);
+  if (!el || !slideData) return;
 
-  Toast.show(`Exporting Branded Slide ${index}...`, 'info', 2000);
+  Toast.show(`Memuat file HD untuk Slide Branded ${index}...`, 'info', 2000);
+
+  const imgTop = el.querySelector(`#img-br-${slideData.id}-top`);
+  const imgBot = el.querySelector(`#img-br-${slideData.id}-bottom`);
+  const origTop = imgTop ? imgTop.src : '';
+  const origBot = imgBot ? imgBot.src : '';
+  
+  const promises = [];
+  if (imgTop && slideData.topId) {
+    promises.push(PhotoDB.getPhoto(IGBuilderState.projectId, slideData.topId, false).then(hd => {
+      if (hd) return new Promise(res => { imgTop.onload = res; imgTop.src = hd; });
+    }));
+  }
+  if (imgBot && slideData.bottomId) {
+    promises.push(PhotoDB.getPhoto(IGBuilderState.projectId, slideData.bottomId, false).then(hd => {
+      if (hd) return new Promise(res => { imgBot.onload = res; imgBot.src = hd; });
+    }));
+  }
+  await Promise.all(promises);
 
   try {
     const canvas = await html2canvas(el, {
@@ -3088,41 +3155,64 @@ async function exportBrandedSlide(slideId, index, customName = null) {
     });
 
     const link = document.createElement('a');
-    const rootName = customName || 'BodaStudio_Branded';
+    const rootName = customName || 'Photo.In_Branded';
     link.download = `${rootName}_${index}.jpg`;
     link.href = canvas.toDataURL('image/jpeg', 0.95);
     link.click();
-    Toast.show(`Branded Slide ${index} Exported!`, 'success');
+    Toast.show(`Branded Slide ${index} Berhasil diexpor HD!`, 'success');
   } catch (err) {
     console.error(err);
     Toast.show('Export failed', 'error');
+  } finally {
+    if (imgTop && origTop) imgTop.src = origTop;
+    if (imgBot && origBot) imgBot.src = origBot;
   }
 }
 
 async function batchExportBrandedSlides() {
   if (IGBuilderState.slides.length === 0) return;
   const project = Store.get(BrandingState.projectId);
-  const folderName = project ? project.name.replace(/[^a-zA-Z0-9_-\s]/g, '').trim() : 'BodaStudio';
+  const folderName = project ? project.name.replace(/[^a-zA-Z0-9_-\s]/g, '').trim() : 'Photo.In';
   
   if (IGBuilderState.slides.length === 1) {
-    // Single slide bypasses ZIP
     await exportBrandedSlide(IGBuilderState.slides[0].id, 1, folderName);
     return;
   }
 
   if (typeof JSZip === 'undefined') {
-    Toast.show('ZIP module not loaded yet! Ensure internet active.', 'error');
+    Toast.show('Modul ZIP belum dimuat! Pastikan internet aktif.', 'error');
     return;
   }
 
-  Toast.show(`Zipping ${IGBuilderState.slides.length} branded slides... \nPlease wait.`, 'info', 5000);
+  Toast.show(`Menyiapkan HD untuk ${IGBuilderState.slides.length} branded slides... \nMohon tunggu.`, 'info', 5000);
+  Swal.fire({ title: 'Merender HD & ZIP...', text: 'Mengambil master kualitas tinggi...', allowOutsideClick: false, didOpen: () => Swal.showLoading()});
   
   try {
     const zip = new JSZip();
     for (let i = 0; i < IGBuilderState.slides.length; i++) {
-      const slideId = IGBuilderState.slides[i].id;
-      const el = document.getElementById('brand-slide-' + slideId);
-      if (el) {
+      const slideData = IGBuilderState.slides[i];
+      const el = document.getElementById('brand-slide-' + slideData.id);
+      if (!el) continue;
+
+      const imgTop = el.querySelector(`#img-br-${slideData.id}-top`);
+      const imgBot = el.querySelector(`#img-br-${slideData.id}-bottom`);
+      const origTop = imgTop ? imgTop.src : '';
+      const origBot = imgBot ? imgBot.src : '';
+  
+      const promises = [];
+      if (imgTop && slideData.topId) {
+        promises.push(PhotoDB.getPhoto(IGBuilderState.projectId, slideData.topId, false).then(hd => {
+          if (hd) return new Promise(res => { imgTop.onload = res; imgTop.src = hd; });
+        }));
+      }
+      if (imgBot && slideData.bottomId) {
+        promises.push(PhotoDB.getPhoto(IGBuilderState.projectId, slideData.bottomId, false).then(hd => {
+          if (hd) return new Promise(res => { imgBot.onload = res; imgBot.src = hd; });
+        }));
+      }
+      await Promise.all(promises);
+
+      try {
         const canvas = await html2canvas(el, {
           scale: 2160 / el.offsetWidth,
           useCORS: true,
@@ -3130,21 +3220,27 @@ async function batchExportBrandedSlides() {
         });
         const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
         const base64Data = dataUrl.split(',')[1];
-        // Name properly inside ZIP: folderName_index.jpg
         zip.file(`${folderName}_${i + 1}.jpg`, base64Data, {base64: true});
+      } catch(e) {
+        console.error(e);
       }
+      
+      if (imgTop && origTop) imgTop.src = origTop;
+      if (imgBot && origBot) imgBot.src = origBot;
     }
     
-    Toast.show('Compiling ZIP format...', 'info', 3000);
+    Swal.fire({ title: 'Membuat ZIP...', text: 'Mengkompresi hasil HD...', allowOutsideClick: false, didOpen: () => Swal.showLoading()});
     const content = await zip.generateAsync({type: 'blob'});
     const link = document.createElement('a');
-    link.download = `${folderName}_Export.zip`; // E.g., OSIS_Event_Export.zip
+    link.download = `${folderName}_Export.zip`; 
     link.href = URL.createObjectURL(content);
     link.click();
     
-    Toast.show('Batch ZIP Export Complete!', 'success');
+    Swal.close();
+    Toast.show('Batch ZIP Export HD Berhasil!', 'success');
   } catch(e) {
     console.error(e);
+    Swal.close();
     Toast.show('ZIP Batch Export failed!', 'error');
   }
 }
@@ -3749,7 +3845,7 @@ function initApp() {
       if (e.key === 'Escape') { closeModal(); closeLightbox(); }
     });
     
-    console.log("Boda Studio AI initialized successfully.");
+    console.log("Photo.In Studio initialized successfully.");
   } catch (err) {
     console.error("Critical Init Error:", err);
     window.onerror(err.message, 'app.js', 0, 0, err);
