@@ -727,7 +727,10 @@ function streamPhotosToGrid(container, photos, projectId, batchSize = 40) {
     const range = document.createRange();
     const fragment = range.createContextualFragment(html);
     fragment.querySelectorAll('.photo-item').forEach(item => {
-      if (!item.querySelector('img').src) PhotoObserver.observe(item);
+      const imgEl = item.querySelector('img');
+      if (!imgEl.getAttribute('src') || imgEl.getAttribute('src') === '') {
+        PhotoObserver.observe(item);
+      }
     });
     container.appendChild(fragment);
     index = end;
