@@ -133,17 +133,12 @@ body {
 }
 
 .sidebar-brand .logo-icon {
-  width: 40px;
-  height: 40px;
+  width: 42px;
+  height: 42px;
   border-radius: var(--radius-sm);
-  background: linear-gradient(135deg, var(--primary), var(--accent));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 900;
-  font-size: 1.1rem;
-  color: #fff;
+  background: transparent;
   flex-shrink: 0;
+  object-fit: contain;
 }
 
 .sidebar-brand .brand-text h1 {
