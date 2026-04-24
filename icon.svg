@@ -1,5 +1,23 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-    <rect width="512" height="512" fill="#0A0F1C" rx="100"/>
-    <rect x="50" y="50" width="412" height="412" fill="#2563EB" rx="80" opacity="0.3"/>
-    <text y="340" x="120" font-size="280">📸</text>
+  <!-- Sclera / Eye Base -->
+  <path fill="#D2D6DC" d="M256 140C110 140 24 256 24 256s86 116 232 116 232-116 232-116-86-116-232-116zm0 186c-38.6 0-70-31.4-70-70s31.4-70 70-70 70 31.4 70 70-31.4 70-70 70z"/>
+  
+  <!-- Outer Iris ring -->
+  <circle cx="256" cy="256" r="70" fill="#E5E7EB"/>
+  
+  <!-- Shutter / Aperture Blades -->
+  <g fill="none" stroke="#D2D6DC" stroke-width="6" stroke-linecap="round">
+    <path d="M256 186 l 16 35" />
+    <path d="M326 256 l -35 16" />
+    <path d="M256 326 l -16 -35" />
+    <path d="M186 256 l 35 -16" />
+    <path d="M306 206 l -25 30" />
+    <path d="M206 306 l 25 -30" />
+  </g>
+  
+  <!-- Pupil -->
+  <circle cx="256" cy="256" r="18" fill="#111827"/>
+  
+  <!-- Eye highlights -->
+  <path d="M136 216 Q200 170 270 170" fill="none" stroke="#E5E7EB" stroke-width="12" stroke-linecap="round" opacity="0.6"/>
 </svg>
