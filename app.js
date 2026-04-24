@@ -4,11 +4,15 @@
 // ── Global Error Handler (Early Catch) ──
 window.onerror = function(msg, url, line, col, error) {
   const container = document.getElementById('main-content');
-  if (container && (!container.innerHTML || container.innerHTML === '')) {
+  if (container) {
     container.innerHTML = `
       <div style="padding:4rem 2rem; text-align:center; color:#ff4d4d; background:rgba(255,0,0,0.05); border-radius:12px; margin:2rem; border:1px solid rgba(255,0,0,0.2);">
         <h2 style="margin-bottom:1rem;">⚠️ Application Error</h2>
         <p style="opacity:0.8; font-size:0.9rem;">${msg}</p>
+        <p style="opacity:0.6; font-size:0.8rem;">Line: ${line}, Col: ${col}, URL: ${url}</p>
+        <p style="opacity:0.6; font-size:0.8rem; text-align:left; background:#222; padding:1rem; border-radius:6px; margin-top:1rem; overflow-x:auto;">
+          ${error && error.stack ? error.stack.replace(/\\n/g, '<br>') : 'No stack trace'}
+        </p>
         <button onclick="location.reload()" style="margin-top:1.5rem; padding:0.6rem 1.2rem; background:#ff4d4d; color:white; border:none; border-radius:6px; cursor:pointer;">Refresh Page</button>
       </div>`;
   }
@@ -280,12 +284,17 @@ const Router = {
 
     // Match parametric routes
     for (const [pattern, handler] of Object.entries(this.routes)) {
-      const regex = new RegExp('^' + pattern.replace(/:[^/]+/g, '([^/]+)') + '$');
+      const regex = new RegExp('^' + pattern.replace(/:[^\\/]+/g, '([^\\/]+)') + '$');
       const match = hash.match(regex);
       if (match) {
-        const content = handler(...match.slice(1));
-        if (typeof content === 'string') {
-          main.innerHTML = `<div class="page-enter"> ${content}</div> `;
+        try {
+          const content = handler(...match.slice(1));
+          if (typeof content === 'string') {
+            main.innerHTML = `<div class="page-enter"> ${content}</div> `;
+          }
+        } catch(err) {
+          main.innerHTML = `<div style="color:red;padding:2rem;">Route Error: ${err.message}<br><pre>${err.stack}</pre></div>`;
+          console.error('Route error:', err);
         }
         return;
       }
@@ -319,10 +328,15 @@ function renderDashboard() {
   const totalPhotos = projects.reduce((s, p) => s + (p.photoCount || 0), 0);
 
   const main = document.getElementById('main-content');
-  main.innerHTML = `<div class="page-enter">
-    <div class="page-header">
-      <h2>Dashboard</h2>
-      <p>Welcome back to BODA STUDIO AI</p>
+  if(!main) {
+     alert('MAIN NOT FOUND'); return;
+  }
+  main.innerHTML = `<div class="page-enter" style="height:100%;">
+    <div class="page-header" style="margin-bottom:1rem;display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <h2>Dashboard</h2>
+        <p>Manage and organize project photos</p>
+      </div>
     </div>
 
     <div class="stats-row">
@@ -547,6 +561,9 @@ async function renderProject(id) {
 
   // Sort photos
   filtered = sortPhotos(filtered, currentSort);
+  
+  window.CurrentLightboxPhotos = filtered;
+  window.CurrentLightboxProjectId = id;
 
   const main = document.getElementById('main-content');
   main.innerHTML = `<div class="page-enter">
@@ -632,6 +649,7 @@ async function renderProject(id) {
   <div class="bulk-bar ${selCount > 0 ? 'show' : ''}" id="bulk-bar">
     <div class="bulk-info"><span>${selCount}</span> photos selected</div>
     <button class="btn btn-ghost btn-sm" onclick="deselectAllPhotos('${id}')">Clear</button>
+    <button class="btn btn-primary btn-sm" style="background:var(--success);border-color:var(--success);" onclick="bulkDownloadPhotos('${id}')">📥 Download</button>
     <button class="btn btn-danger btn-sm" onclick="bulkDeletePhotos('${id}')">🗑️ Delete</button>
     <button class="btn btn-primary btn-sm" onclick="IGBuilderState.projectId = '${id}'; Router.navigate('#ig-builder');">→ IG Builder</button>
   </div>
@@ -740,18 +758,10 @@ function handlePhotoClick(el) {
     clearTimeout(_clickTimer);
     _clickCount = 0;
     
-    // 1. Show thumbnail immediately if available
-    const thumb = (PhotoCache[projectId] || {})[photoId];
-    if (thumb) openLightbox(thumb, photoName);
-
-    // 2. Fetch HD version from DB for best quality
-    PhotoDB.getPhoto(projectId, photoId, false).then(hdUrl => {
-      if (hdUrl) {
-        openLightbox(hdUrl, photoName);
-      } else if (!thumb) {
-        Toast.show('High-res photo not found', 'error');
-      }
-    });
+    if (window.CurrentLightboxPhotos) {
+      const idx = window.CurrentLightboxPhotos.findIndex(p => p.id === photoId);
+      if (idx !== -1) openLightboxAt(idx);
+    }
   }
 }
 
@@ -1035,17 +1045,182 @@ async function addPhotosToProject(projectId) {
   input.click();
 }
 
-// ── Lightbox ──
-function openLightbox(src, name) {
-  if (!src) return;
+// ── Lightbox & Histogram ──
+window.CurrentLightboxIndex = 0;
+
+async function openLightboxAt(index) {
+  if (!window.CurrentLightboxPhotos || index < 0 || index >= window.CurrentLightboxPhotos.length) return;
+  window.CurrentLightboxIndex = index;
+  const photo = window.CurrentLightboxPhotos[index];
+  const projectId = window.CurrentLightboxProjectId;
+  
   const lb = document.getElementById('lightbox');
-  lb.querySelector('img').src = src;
-  lb.querySelector('img').alt = name;
+  const imgEL = document.getElementById('lightbox-img');
+  
   lb.classList.add('show');
+
+  // Try cache
+  let src = (PhotoCache[projectId] || {})[photo.id];
+  
+  // Proactively fetch HD
+  PhotoDB.getPhoto(projectId, photo.id, false).then(hdUrl => {
+    if (hdUrl) {
+      imgEL.src = hdUrl;
+    } else if (!src) {
+      Toast.show('High-res photo not found', 'error');
+    }
+  });
+
+  if (src) imgEL.src = src;
+  else imgEL.src = ''; 
+  
+  imgEL.alt = photo.name;
+
+  // Clear histogram
+  const canvas = document.getElementById('histogram-canvas');
+  if (canvas) {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0,0, canvas.width, canvas.height);
+  }
+
+  imgEL.onload = () => {
+    drawHistogram(imgEL);
+  };
 }
 
 function closeLightbox() {
   document.getElementById('lightbox').classList.remove('show');
+}
+
+function prevLightboxPhoto(e) {
+  if (e) e.stopPropagation();
+  openLightboxAt(window.CurrentLightboxIndex - 1);
+}
+
+function nextLightboxPhoto(e) {
+  if (e) e.stopPropagation();
+  openLightboxAt(window.CurrentLightboxIndex + 1);
+}
+
+function downloadLightboxPhoto() {
+  if (!window.CurrentLightboxPhotos || window.CurrentLightboxIndex < 0 || window.CurrentLightboxIndex >= window.CurrentLightboxPhotos.length) return;
+  const photo = window.CurrentLightboxPhotos[window.CurrentLightboxIndex];
+  const projectId = window.CurrentLightboxProjectId;
+  
+  Toast.show('Menyiapkan file unduhan...', 'info');
+  PhotoDB.getPhoto(projectId, photo.id, false).then(dataUrl => {
+    if (dataUrl) {
+      const link = document.createElement('a');
+      link.download = photo.name;
+      link.href = dataUrl;
+      link.click();
+      Toast.show('1 Foto diunduh', 'success');
+    } else {
+      Toast.show('Resolusi tinggi tidak ditemukan!', 'error');
+    }
+  });
+}
+
+async function bulkDownloadPhotos(projectId) {
+  const count = SelectionState.totalSelected();
+  if (count === 0) return;
+  const selectedIds = new Set(SelectionState.selected);
+  const photos = Store.getPhotos(projectId).filter(p => selectedIds.has(p.id));
+
+  Swal.fire({
+    title: 'Mempersiapkan ZIP...',
+    text: 'Sedang mengkompresi foto-foto Anda...',
+    allowOutsideClick: false,
+    showConfirmButton: false,
+    didOpen: async () => {
+      Swal.showLoading();
+      try {
+        const zip = new JSZip();
+        for (const photo of photos) {
+          const dataUrl = await PhotoDB.getPhoto(projectId, photo.id, false);
+          if (dataUrl) {
+            const base64Data = dataUrl.split(',')[1];
+            zip.file(photo.name, base64Data, {base64: true});
+          }
+        }
+        
+        const content = await zip.generateAsync({type:"blob"});
+        const link = document.createElement('a');
+        const projName = Store.get(projectId)?.name || 'Project';
+        link.download = `BodaStudio_${projName}_${count}photos.zip`;
+        link.href = URL.createObjectURL(content);
+        link.click();
+        
+        Swal.close();
+        Toast.show(`Berhasil mengunduh ${count} foto!`, 'success');
+      } catch (err) {
+        Swal.close();
+        Toast.show('Terjadi kesalahan saat membuat ZIP', 'error');
+        console.error(err);
+      }
+    }
+  });
+}
+
+// Keyboard shortcuts for Lightbox
+document.addEventListener('keydown', (e) => {
+  const lb = document.getElementById('lightbox');
+  if (lb && lb.classList.contains('show')) {
+    if (e.key === 'ArrowLeft') prevLightboxPhoto();
+    if (e.key === 'ArrowRight') nextLightboxPhoto();
+    if (e.key === 'Escape') closeLightbox();
+  }
+});
+
+function drawHistogram(img) {
+  const canvas = document.getElementById('histogram-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  
+  const offCanvas = document.createElement('canvas');
+  const offCtx = offCanvas.getContext('2d', { willReadFrequently: true });
+  const w = 120; 
+  const h = Math.round(120 / (img.naturalWidth/img.naturalHeight) || 120);
+  if (w <= 0 || h <= 0) return;
+  offCanvas.width = w;
+  offCanvas.height = h;
+  offCtx.drawImage(img, 0, 0, w, h);
+  
+  const imgData = offCtx.getImageData(0, 0, w, h).data;
+  const rBin = new Array(256).fill(0);
+  const gBin = new Array(256).fill(0);
+  const bBin = new Array(256).fill(0);
+  
+  let maxCount = 0;
+  for (let i = 0; i < imgData.length; i += 4) {
+    rBin[imgData[i]]++;
+    gBin[imgData[i+1]]++;
+    bBin[imgData[i+2]]++;
+  }
+  for (let i=0; i<256; i++) {
+     maxCount = Math.max(maxCount, rBin[i], gBin[i], bBin[i]);
+  }
+  
+  ctx.clearRect(0,0, canvas.width, canvas.height);
+  ctx.globalCompositeOperation = 'screen';
+  
+  function drawChannel(bin, color) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(0, canvas.height);
+    for (let i=0; i<256; i++) {
+        const x = (i / 256) * canvas.width;
+        const y = canvas.height - ((bin[i] / maxCount) * canvas.height * 0.9);
+        ctx.lineTo(x, y);
+    }
+    ctx.lineTo(canvas.width, canvas.height);
+    ctx.closePath();
+    ctx.fill();
+  }
+  
+  drawChannel(rBin, 'rgba(255, 60, 60, 0.8)');
+  drawChannel(gBin, 'rgba(60, 255, 60, 0.8)');
+  drawChannel(bBin, 'rgba(60, 60, 255, 0.8)');
 }
 
 function changeStatus(id) {
@@ -1328,13 +1503,9 @@ function showContextMenu(e, el) {
 
 function ctxView(projectId, photoId, photoName) {
   document.querySelectorAll('.ctx-menu').forEach(m => m.remove());
-  const cache = PhotoCache[projectId] || {};
-  const url = cache[photoId];
-  if (url) { openLightbox(url, photoName); }
-  else {
-    PhotoDB.getPhoto(projectId, photoId).then(d => {
-      if (d) { if (!PhotoCache[projectId]) PhotoCache[projectId] = {}; PhotoCache[projectId][photoId] = d; openLightbox(d, photoName); }
-    });
+  if (window.CurrentLightboxPhotos && window.CurrentLightboxProjectId === projectId) {
+    const idx = window.CurrentLightboxPhotos.findIndex(p => p.id === photoId);
+    if (idx !== -1) openLightboxAt(idx);
   }
 }
 
@@ -1475,6 +1646,107 @@ function renameProjectInline(projectId) {
   });
 }
 
+// ══════════════════════════════════════
+// PHASE 3 — IG Builder & Live Preview
+// ══════════════════════════════════════
+
+const IGLiveState = {
+  sessionId: null,
+  isActive: false,
+  timeoutRef: null,
+  
+  toggleLive() {
+    this.isActive = !this.isActive;
+    const btn = document.getElementById('live-preview-btn');
+    const badge = document.getElementById('live-badge');
+    
+    if (this.isActive) {
+      if (!this.sessionId) this.sessionId = Math.random().toString(36).substr(2, 6);
+      this.showQRCode();
+      if(btn) { btn.classList.add('btn-primary'); btn.style.background = 'var(--accent)'; }
+      if(badge) badge.style.display = 'inline-block';
+      this.syncLive();
+    } else {
+      if (this.sessionId && fbRealtime) {
+        fbRealtime.ref('ig_live_preview/' + this.sessionId).remove();
+      }
+      this.sessionId = null;
+      if(btn) { btn.classList.remove('btn-primary'); btn.style.background = ''; }
+      if(badge) badge.style.display = 'none';
+      if(window.Toast) Toast.show('Live Preview dimatikan', 'info');
+    }
+  },
+  
+  showQRCode() {
+    const url = "https://link-bod.firebaseapp.com/#live/" + this.sessionId;
+    const qrUrl = `https://chart.googleapis.com/chart?chs=250x250&cht=qr&chl=${encodeURIComponent(url)}`;
+    Swal.fire({
+      title: 'Scan untuk Live Preview',
+      html: `
+        <img src="${qrUrl}" style="margin: 0 auto; display: block; border-radius: 8px;">
+        <p style="margin-top: 1rem; font-size: 0.9rem; color: #555;">Scan kode ini menggunakan HP Anda.</p>
+        <p style="margin-top: 0.5rem; font-size: 0.70rem; word-wrap: break-word;"><a href="${url}" target="_blank">${url}</a></p>
+      `,
+      confirmButtonText: 'Tutup',
+      background: 'rgba(255, 255, 255, 0.95)'
+    });
+  },
+
+  syncLive() {
+    if (!this.isActive || !this.sessionId || !fbRealtime) return;
+    clearTimeout(this.timeoutRef);
+    this.timeoutRef = setTimeout(async () => {
+      const slides = document.querySelectorAll('.ig-slide');
+      if (!slides.length) return;
+      if (Swal.isVisible()) return; // Don't sync when UI is blocked
+      
+      const renders = [];
+      for (const slide of slides) {
+        try {
+          const canvas = await html2canvas(slide, { scale: 0.4, useCORS: true, logging: false });
+          renders.push(canvas.toDataURL('image/jpeg', 0.6));
+        } catch(e) {}
+      }
+      if (renders.length > 0) {
+        fbRealtime.ref('ig_live_preview/' + this.sessionId).update({
+          status: 'live',
+          updatedAt: Date.now(),
+          slides: renders
+        });
+      }
+    }, 1500); 
+  },
+
+  async pushHD() {
+    if (!this.isActive || !this.sessionId || !fbRealtime) {
+      if(window.Toast) Toast.show('Silakan aktifkan Live (QR Code) terlebih dahulu.', 'warning');
+      return;
+    }
+    Swal.fire({ title: 'Merender HD...', text: 'Mengirim kualitas tinggi ke HP Anda', allowOutsideClick: false, didOpen: () => Swal.showLoading()});
+    const slides = document.querySelectorAll('.ig-slide');
+    const renders = [];
+    for (const slide of slides) {
+      try {
+        const canvas = await html2canvas(slide, { scale: 1.5, useCORS: true, logging: false });
+        renders.push(canvas.toDataURL('image/jpeg', 0.85));
+      } catch(e) {}
+    }
+    if (renders.length > 0) {
+      fbRealtime.ref('ig_live_preview/' + this.sessionId).update({
+        status: 'hd',
+        updatedAt: Date.now(),
+        slidesHD: renders
+      }).then(() => {
+        Swal.fire('Berhasil Terkirim', 'Silakan unduh gambar dari layar HP Anda (Long Press -> Save).', 'success');
+      }).catch(() => {
+        Swal.fire('Gagal', 'Terjadi kesalahan jaringan.', 'error');
+      });
+    } else {
+        Swal.close();
+    }
+  }
+};
+
 // ── Modal: New Project (SweetAlert2) ──
 function showNewProjectModal() {
   Swal.fire({
@@ -1529,6 +1801,7 @@ const IGBuilderState = {
     if (this.projectId) {
       localStorage.setItem('boda_ig_slides_' + this.projectId, JSON.stringify(this.slides));
     }
+    if (typeof IGLiveState !== 'undefined') IGLiveState.syncLive();
   },
   addSlide() {
     this.slides.push({
@@ -1607,6 +1880,10 @@ async function renderIGBuilder() {
         <p>Drag photos to create perfect ${IGBuilderState.format === '9:16' ? '1080x1920' : '1080x1350'} canvas for Instagram</p>
       </div>
       <div style="display:flex;gap:0.75rem;align-items:center;">
+        <div style="display:flex;gap:0.5rem;align-items:center;background:rgba(255,255,255,0.05);padding:0.25rem;border-radius:var(--radius-sm);margin-right:0.5rem;">
+          <button id="live-preview-btn" class="btn btn-ghost btn-sm ${IGLiveState.isActive ? 'btn-primary' : ''}" style="${IGLiveState.isActive ? 'background:var(--accent)' : ''}" onclick="IGLiveState.toggleLive()">📱 Live <span id="live-badge" style="display:${IGLiveState.isActive ? 'inline-block' : 'none'};width:8px;height:8px;background:red;border-radius:50%;margin-left:4px;animation:pulse 1.5s infinite;"></span></button>
+          <button class="btn btn-ghost btn-sm" onclick="IGLiveState.pushHD()">🚀 Push HD</button>
+        </div>
         <select class="btn btn-ghost" onchange="IGBuilderState.setFormat(this.value);renderIGBuilder()" style="padding:0.5rem 1rem;background:var(--bg-glass);border:1px solid var(--border-glass);color:var(--text-primary);border-radius:var(--radius-xs);">
           <option value="4:5" ${IGBuilderState.format === '4:5' ? 'selected' : ''}>4:5 (1080x1350)</option>
           <option value="9:16" ${IGBuilderState.format === '9:16' ? 'selected' : ''}>9:16 (1080x1920)</option>
@@ -1615,7 +1892,7 @@ async function renderIGBuilder() {
           ${projects.map(p => `<option value="${p.id}" ${p.id === IGBuilderState.projectId ? 'selected' : ''}>${p.name}</option>`).join('')}
         </select>
         <button class="btn btn-primary" onclick="IGBuilderState.addSlide();renderIGSlides();">+ Add Slide</button>
-        <button class="btn btn-primary" onclick="batchExportIGSlides()" style="background:var(--success);">📥 Export All</button>
+        <button class="btn btn-primary" onclick="batchExportIGSlides()" style="background:var(--success);">📥 PC Export All</button>
       </div>
     </div>
     
@@ -2122,7 +2399,9 @@ const BrandingState = {
   },
 
   initMigrate() {
-    _injectCustomFonts(); // Ensure custom fonts are loaded
+    if (typeof _injectCustomFonts === 'function') {
+      _injectCustomFonts(); // Ensure custom fonts are loaded
+    }
 
     if (this.logos.length === 0) {
       const old = localStorage.getItem('boda_branding_logo');
@@ -2211,7 +2490,6 @@ const BrandingState = {
     this.saveState();
   }
 };
-BrandingState.initMigrate();
 
 function renderBranding() {
   const oldAside = document.querySelector('.branding-sidebar');
@@ -3248,9 +3526,56 @@ function renderLinkBoda() {
   main.innerHTML = `<iframe src="link 6.html" style="width:100%;height:100%;border:none;border-radius:var(--radius-lg);background:linear-gradient(-45deg, #a2d2ff, #fefae0, #ffffff, #bde0fe);"></iframe>`;
 }
 
-// ── Sidebar toggle (mobile) ──
 function toggleSidebar() {
-  document.querySelector('.sidebar').classList.toggle('open');
+  const sidebar = document.querySelector('.sidebar');
+  if (sidebar) sidebar.classList.toggle('open');
+}
+
+function renderLiveView(sessionId) {
+  const main = document.getElementById('main-content');
+  if(!main) return;
+  
+  // Hide sidebar and header explicitly for this view
+  const sidebar = document.querySelector('.sidebar');
+  if (sidebar) sidebar.style.display = 'none';
+  
+  main.innerHTML = `<div style="height:100vh;width:100%;background:#0a0a0a;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;position:fixed;top:0;left:0;z-index:9999;">
+    <h3 style="color:#aaa;margin-bottom:1rem;font-family:Inter,sans-serif;">Menunggu sinyal PC...</h3>
+    <div style="width:40px;height:40px;border:4px solid rgba(255,255,255,0.1);border-top:4px solid var(--primary);border-radius:50%;animation:spin 1s linear infinite;"></div>
+  </div>`;
+
+  if (!fbRealtime) {
+    main.innerHTML = '<div style="padding:2rem;color:red;font-family:Inter,sans-serif;">Firebase Realtime tidak aktif.</div>';
+    return;
+  }
+
+  fbRealtime.ref('ig_live_preview/' + sessionId).on('value', snap => {
+    const data = snap.val();
+    if (!data || !data.slides) {
+      main.innerHTML = `<div style="height:100vh;width:100%;background:#0a0a0a;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;position:fixed;top:0;left:0;z-index:9999;font-family:Inter,sans-serif;">
+        <h3 style="color:#666;margin-bottom:1rem;">Koneksi PC terputus / dihentikan.</h3>
+      </div>`;
+      return;
+    }
+    
+    const isHD = data.status === 'hd' && data.slidesHD;
+    const slidesToRender = isHD ? data.slidesHD : data.slides;
+    
+    let html = `<div style="min-height:100vh;width:100vw;background:#050505;position:fixed;top:0;left:0;z-index:9999;overflow-y:auto;padding-bottom:5rem;font-family:Inter,sans-serif;">
+      <div style="position:sticky;top:0;background:rgba(5,5,5,0.85);backdrop-filter:blur(15px);-webkit-backdrop-filter:blur(15px);padding:1rem 1.5rem;display:flex;justify-content:space-between;align-items:center;z-index:10000;border-bottom:1px solid rgba(255,255,255,0.05);">
+        <div style="font-weight:700;color:${isHD ? '#00e676' : '#ff3b3b'};display:flex;align-items:center;gap:0.5rem;letter-spacing:1px;font-size:0.9rem;">
+           <span style="font-size:0.8rem;animation:pulse 1s infinite;">●</span> ${isHD ? 'HD READY' : 'LIVE PREVIEW'}
+        </div>
+        ${isHD ? `<div style="font-size:0.75rem;color:#aaa;background:rgba(255,255,255,0.1);padding:0.2rem 0.6rem;border-radius:12px;">Long-Press to Save</div>` : `<div style="font-size:0.75rem;color:#666;font-style:italic;">Low-res mode</div>`}
+      </div>
+      <div style="display:flex;flex-direction:column;gap:1.5rem;padding:1.5rem 1rem;max-width:600px;margin:0 auto;">
+         ${slidesToRender.map(img => `
+           <img src="${img}" style="width:100%;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,0.8);display:block;">
+         `).join('')}
+      </div>
+    </div>`;
+    main.innerHTML = html;
+  });
 }
 
 // ══════════════════════════════════════
@@ -3378,6 +3703,10 @@ function initApp() {
 
   try {
     Toast.init();
+    
+    // Perform migrations safely
+    BrandingState.initMigrate();
+    
     SettingsState.load(); // Load global config from Firebase
 
     // Preload title font if set
@@ -3392,6 +3721,7 @@ function initApp() {
     Router.register('#branding', () => { renderBranding(); });
     Router.register('#settings', () => { renderSettings(); });
     Router.register('#linkboda', () => { renderLinkBoda(); });
+    Router.register('#live/:id', (id) => { renderLiveView(id); });
 
     Router.init();
 
