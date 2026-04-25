@@ -1,7 +1,7 @@
 {
-  "name": "BODA STUDIO AI",
-  "short_name": "BodaStudio",
-  "description": "Smart photo management & IG content builder.",
+  "name": "Photo.In",
+  "short_name": "Photo.In",
+  "description": "Yuk Kita Photo.In.",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#0A0F1C",
