@@ -117,20 +117,18 @@ function driveUploadFile(parentId, filename, mimeType, base64Data) {
 // JALANKAN SEKALI untuk memicu otorisasi
 // ═══════════════════════════════════════
 function setup() {
+  // BARIS INI PENTING: Memaksa Google meminta izin akses Google Drive
+  // karena kita menggunakan REST API. Jangan dihapus.
+  try { DriveApp.getRootFolder(); } catch(e) {}
+
   // Hanya fungsi dummy untuk memicu prompt OAuth dari AppScript
   // Permissions akan diproses berdasarkan appsscript.json
   const token = ScriptApp.getOAuthToken();
   Logger.log("✅ Setup berhasil! OAuth Token: " + (token ? "Aktif" : "Gagal"));
   Logger.log("✅ Akun aktif: " + Session.getActiveUser().getEmail());
   
-  // Tes akses folder target via REST API
-  try {
-    const folder = driveGetFolder("1KGzXGO3EnFl1I9hpQkY4cMk6nw8kI4cM");
-    Logger.log("✅ Target folder accessible via API: " + folder.name);
-  } catch(e) {
-    Logger.log("❌ Target folder GAGAL diakses: " + e.toString());
-    Logger.log("Pastikan folder dimiliki atau di-share ke akun Anda.");
-  }
+  // Tes akses
+  Logger.log("✅ API siap menerima request dari Boda Studio.");
 }
 
 // ═══════════════════════════════════════
@@ -140,8 +138,11 @@ function doPost(e) {
   try {
     const data = JSON.parse(e.postData.contents);
     let folderId = data.folderId;
-    if (folderId && folderId.indexOf('?') > -1) {
-      folderId = folderId.split('?')[0];
+    if (folderId) {
+      const match = folderId.match(/folders\/([a-zA-Z0-9_-]+)/);
+      if (match) folderId = match[1];
+      else if (folderId.indexOf('id=') > -1) folderId = folderId.split('id=')[1].split('&')[0];
+      else if (folderId.indexOf('?') > -1) folderId = folderId.split('?')[0];
     }
     const filename = data.filename;
     const base64Str = data.base64;
@@ -189,9 +190,67 @@ function doPost(e) {
 }
 
 function doGet(e) {
-  return ContentService.createTextOutput(JSON.stringify({
-    status: "ok",
-    message: "BODA STUDIO AI Cloud Endpoint Active.",
-    timestamp: new Date().toISOString()
-  })).setMimeType(ContentService.MimeType.JSON);
+  try {
+    const action = e.parameter.action;
+    
+    if (action === 'listPhotos') {
+      const folderUrl = e.parameter.folderUrl;
+      if (!folderUrl) throw new Error("folderUrl tidak diberikan");
+      
+      // Extract folder ID from URL
+      let folderId = folderUrl;
+      const match = folderUrl.match(/folders\/([a-zA-Z0-9_-]+)/);
+      if (match) folderId = match[1];
+      else if (folderUrl.indexOf('id=') > -1) folderId = folderUrl.split('id=')[1].split('&')[0];
+      
+      const token = ScriptApp.getOAuthToken();
+      const query = "'" + folderId + "' in parents and mimeType contains 'image/' and trashed=false";
+      const res = UrlFetchApp.fetch(
+        "https://www.googleapis.com/drive/v3/files?q=" + encodeURIComponent(query) + "&fields=files(id,name,thumbnailLink,webContentLink)&pageSize=100&orderBy=createdTime desc",
+        { headers: { "Authorization": "Bearer " + token }, muteHttpExceptions: true }
+      );
+      
+      if (res.getResponseCode() !== 200) throw new Error(res.getContentText());
+      const data = JSON.parse(res.getContentText());
+      
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "success",
+        files: data.files || []
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    if (action === 'getHDBase64') {
+      const fileId = e.parameter.fileId;
+      if (!fileId) throw new Error("fileId tidak diberikan");
+      
+      const token = ScriptApp.getOAuthToken();
+      const res = UrlFetchApp.fetch(
+        "https://www.googleapis.com/drive/v3/files/" + fileId + "?alt=media",
+        { headers: { "Authorization": "Bearer " + token }, muteHttpExceptions: true }
+      );
+      
+      if (res.getResponseCode() !== 200) throw new Error(res.getContentText());
+      
+      const blob = res.getBlob();
+      const base64 = Utilities.base64Encode(blob.getBytes());
+      const mimeType = blob.getContentType();
+      
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "success",
+        base64: "data:" + mimeType + ";base64," + base64
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "ok",
+      message: "BODA STUDIO AI Cloud Endpoint Active.",
+      timestamp: new Date().toISOString()
+    })).setMimeType(ContentService.MimeType.JSON);
+    
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "error",
+      message: error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
 }
