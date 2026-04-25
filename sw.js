@@ -1,4 +1,4 @@
-const CACHE_NAME = 'boda-studio-ai-v1';
+const CACHE_NAME = 'boda-studio-ai-v6';
 const ASSETS_TO_CACHE = [
     './',
     './index.html',
@@ -34,7 +34,7 @@ self.addEventListener('activate', event => {
     );
 });
 
-// Fetch event: Network-first, fallback to cache
+// Fetch event: Stale-While-Revalidate for blazing fast loads
 self.addEventListener('fetch', event => {
     // We don't want to trap Firebase or Google Drive API calls in the cache
     if (event.request.url.includes('googleapis.com') ||
@@ -45,16 +45,20 @@ self.addEventListener('fetch', event => {
     }
 
     event.respondWith(
-        fetch(event.request)
-            .then(response => {
+        caches.match(event.request).then(cachedResponse => {
+            const fetchPromise = fetch(event.request).then(networkResponse => {
                 // Update cache dynamically upon successful fetch
-                if (response && response.status === 200 && response.type === 'basic') {
-                    const responseToCache = response.clone();
-                    caches.open(CACHE_NAME)
-                        .then(cache => cache.put(event.request, responseToCache));
+                if (networkResponse && networkResponse.status === 200 && (networkResponse.type === 'basic' || networkResponse.type === 'cors')) {
+                    const responseToCache = networkResponse.clone();
+                    caches.open(CACHE_NAME).then(cache => cache.put(event.request, responseToCache));
                 }
-                return response;
-            })
-            .catch(() => caches.match(event.request))
+                return networkResponse;
+            }).catch(() => {
+                // Ignore network errors since we might already have a cached version
+            });
+
+            // Return cached response immediately if available, otherwise wait for network
+            return cachedResponse || fetchPromise;
+        })
     );
 });
