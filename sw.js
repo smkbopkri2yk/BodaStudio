@@ -1,4 +1,4 @@
-const CACHE_NAME = 'boda-studio-ai-v6';
+const CACHE_NAME = 'boda-studio-ai-v8';
 const ASSETS_TO_CACHE = [
     './',
     './index.html',
