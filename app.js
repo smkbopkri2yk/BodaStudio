@@ -23,6 +23,57 @@ window.onerror = function(msg, url, line, col, error) {
 // Main Core Application
 // ============================================================================
 
+// ── Mobile & Desktop Sidebar Toggle ──
+function toggleSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const main = document.getElementById('main-content');
+  const isMobile = window.innerWidth <= 768;
+
+  if (sidebar) {
+    if (isMobile) {
+      sidebar.classList.toggle('open');
+      
+      // Add or remove overlay
+      let overlay = document.getElementById('sidebar-overlay');
+      if (sidebar.classList.contains('open')) {
+        if (!overlay) {
+          overlay = document.createElement('div');
+          overlay.id = 'sidebar-overlay';
+          overlay.style.position = 'fixed';
+          overlay.style.inset = '0';
+          overlay.style.background = 'rgba(0,0,0,0.5)';
+          overlay.style.zIndex = '90';
+          overlay.style.backdropFilter = 'blur(4px)';
+          overlay.onclick = toggleSidebar;
+          document.body.appendChild(overlay);
+        } else {
+          overlay.style.display = 'block';
+        }
+      } else {
+        if (overlay) overlay.style.display = 'none';
+      }
+    } else {
+      // Desktop
+      sidebar.classList.toggle('collapsed');
+      if (main) main.classList.toggle('expanded');
+    }
+  }
+}
+
+// Ensure overlay closes when clicking a nav item
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.nav-item').forEach(item => {
+    item.removeAttribute('onclick'); // remove inline onclick
+    item.addEventListener('click', () => {
+      const isMobile = window.innerWidth <= 768;
+      const sidebar = document.getElementById('sidebar');
+      if (isMobile && sidebar && sidebar.classList.contains('open')) {
+        toggleSidebar(); // smoothly close on mobile
+      }
+    });
+  });
+});
+
 // ══════════════════════════════════════
 // FIREBASE Link Boda Integration
 // ══════════════════════════════════════
@@ -183,7 +234,36 @@ const PhotoDB = {
       const storeName = isThumb ? this.THUMB_STORE : this.STORE_NAME;
       const tx = db.transaction(storeName, 'readonly');
       const req = tx.objectStore(storeName).get(`${projectId}_${photoId}`);
-      req.onsuccess = () => resolve(req.result || null);
+      req.onsuccess = async () => {
+        let result = req.result;
+        
+        // --- INTERCEPT CLOUD HD FETCH ---
+        if (!isThumb && result && typeof result === 'string' && result.startsWith('CLOUD_HD_PENDING:')) {
+           const driveId = result.split(':')[1];
+           try {
+              if (window.Toast) Toast.show(`Mengunduh HD (${photoId})...`, 'info', 3000);
+              const doc = await fbDb.collection('settings').doc('cloud_sync').get();
+              const gasUrl = doc.data().gasUrl;
+              const res = await fetch(`${gasUrl}?action=getHDBase64&fileId=${driveId}`);
+              const data = await res.json();
+              if (data.status === 'success') {
+                 // Return the fetched HD base64 string directly
+                 resolve(data.base64);
+                 return;
+              }
+           } catch(e) {
+              console.error("Gagal menarik HD dari awan", e);
+              if (window.Toast) Toast.show(`Gagal unduh HD. Menggunakan resolusi rendah.`, 'error');
+              // Fallback to thumbnail if HD fetch fails
+              const thumbTx = db.transaction(this.THUMB_STORE, 'readonly');
+              const thumbReq = thumbTx.objectStore(this.THUMB_STORE).get(`${projectId}_${photoId}`);
+              thumbReq.onsuccess = () => resolve(thumbReq.result || null);
+              return;
+           }
+        }
+        
+        resolve(result || null);
+      };
       req.onerror = (e) => reject(e.target.error);
     });
   },
@@ -1105,6 +1185,27 @@ function nextLightboxPhoto(e) {
   openLightboxAt(window.CurrentLightboxIndex + 1);
 }
 
+// ── Mobile Swipe for Lightbox ──
+let lbTouchStartX = 0;
+document.addEventListener('touchstart', e => {
+  const lb = document.getElementById('lightbox');
+  if (lb && lb.classList.contains('show') && e.changedTouches.length > 0) {
+    lbTouchStartX = e.changedTouches[0].screenX;
+  }
+}, {passive: true});
+
+document.addEventListener('touchend', e => {
+  const lb = document.getElementById('lightbox');
+  if (lb && lb.classList.contains('show') && e.changedTouches.length > 0) {
+    const touchEndX = e.changedTouches[0].screenX;
+    const diff = touchEndX - lbTouchStartX;
+    if (Math.abs(diff) > 50) {
+      if (diff > 0) prevLightboxPhoto();
+      else nextLightboxPhoto();
+    }
+  }
+}, {passive: true});
+
 function downloadLightboxPhoto() {
   if (!window.CurrentLightboxPhotos || window.CurrentLightboxIndex < 0 || window.CurrentLightboxIndex >= window.CurrentLightboxPhotos.length) return;
   const photo = window.CurrentLightboxPhotos[window.CurrentLightboxIndex];
@@ -1628,6 +1729,212 @@ function bulkDeletePhotos(projectId) {
   });
 }
 
+// ══════════════════════════════════════
+// CLOUD EXPLORER (Link Boda Import)
+// ══════════════════════════════════════
+async function getCloudSyncUrl() {
+  if (!fbDb) throw new Error("Firebase belum aktif");
+  const doc = await fbDb.collection('settings').doc('cloud_sync').get();
+  if (doc.exists) {
+    return doc.data().gasUrl;
+  }
+  throw new Error("URL Cloud Sync belum disetel di Settings");
+}
+
+let _cloudExplorerCache = [];
+let _cloudPhotosSelection = new Set();
+
+async function openCloudExplorer() {
+  const modal = document.getElementById('modal-content');
+  const overlay = document.getElementById('modal-overlay');
+  
+  modal.innerHTML = `<div style="padding:2rem;text-align:center;">Memuat data dari Link Boda...</div>`;
+  overlay.classList.add('show');
+  
+  try {
+    if (!fbDb) throw new Error("Koneksi Firebase terputus.");
+    const snapshot = await fbDb.collection('links').get();
+    const links = [];
+    snapshot.forEach(doc => links.push({id: doc.id, ...doc.data()}));
+    _cloudExplorerCache = links;
+    renderCloudProjects();
+  } catch (err) {
+    modal.innerHTML = `<div style="padding:2rem;text-align:center;color:red;">Error: ${err.message}<br><button class="btn btn-ghost mt-3" onclick="closeModal()">Tutup</button></div>`;
+  }
+}
+
+function renderCloudProjects() {
+  const modal = document.getElementById('modal-content');
+  let html = `
+    <div style="padding:1.5rem;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+        <h3 style="margin:0;">☁️ Pilih Proyek dari Cloud</h3>
+        <button class="btn btn-ghost" onclick="closeModal()">✕</button>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:0.5rem;max-height:60vh;overflow-y:auto;padding-right:0.5rem;">
+  `;
+  if (_cloudExplorerCache.length === 0) {
+    html += `<div style="text-align:center;color:var(--text-muted);padding:2rem;">Belum ada tautan di Link Boda.</div>`;
+  } else {
+    _cloudExplorerCache.forEach(link => {
+      html += `
+        <div style="background:var(--bg-glass);border:1px solid var(--border-glass);border-radius:var(--radius-sm);padding:1rem;display:flex;justify-content:space-between;align-items:center;cursor:pointer;transition:all 0.2s;" onmouseover="this.style.background='var(--bg-glass-hover)'" onmouseout="this.style.background='var(--bg-glass)'" onclick="openCloudFolder('${link.url}', '${link.name}')">
+          <div style="font-weight:600;">📁 ${link.name}</div>
+          <div style="font-size:0.8rem;color:var(--primary-light);">Buka →</div>
+        </div>
+      `;
+    });
+  }
+  html += `</div></div>`;
+  modal.innerHTML = html;
+}
+
+async function openCloudFolder(folderUrl, projectName) {
+  const modal = document.getElementById('modal-content');
+  modal.innerHTML = `<div style="padding:2rem;text-align:center;">
+    <div style="margin-bottom:1rem;font-size:2rem;">☁️</div>
+    <div>Mengambil daftar foto dari Google Drive...</div>
+    <div style="font-size:0.8rem;color:var(--text-muted);margin-top:0.5rem;">${projectName}</div>
+  </div>`;
+  _cloudPhotosSelection.clear();
+
+  try {
+    const gasUrl = await getCloudSyncUrl();
+    const response = await fetch(`${gasUrl}?action=listPhotos&folderUrl=${encodeURIComponent(folderUrl)}`);
+    const data = await response.json();
+    if (data.status !== 'success') throw new Error(data.message || "Gagal mengambil daftar foto");
+    const files = data.files;
+    
+    let html = `
+      <div style="padding:1.5rem;display:flex;flex-direction:column;height:80vh;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-shrink:0;">
+          <h3 style="margin:0;display:flex;align-items:center;gap:0.5rem;font-size:1.1rem;">
+            <button class="btn btn-ghost btn-sm" onclick="renderCloudProjects()" style="padding:0.2rem 0.5rem;">← Kembali</button>
+            ${projectName}
+          </h3>
+          <button class="btn btn-ghost" onclick="closeModal()">✕</button>
+        </div>
+        <div style="flex:1;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill, minmax(100px, 1fr));gap:0.5rem;padding-right:0.5rem;" id="cloud-photo-grid">
+    `;
+    if (files.length === 0) {
+      html += `<div style="grid-column:1/-1;text-align:center;padding:2rem;color:var(--text-muted);">Folder kosong atau tidak berisi gambar.</div>`;
+    } else {
+      files.forEach(file => {
+        const thumbUrl = file.thumbnailLink ? file.thumbnailLink.replace(/=s\d+/, '=w300') : '';
+        html += `
+          <div class="cloud-thumb-card" id="cloud-card-${file.id}" style="position:relative;padding-top:100%;border-radius:var(--radius-xs);overflow:hidden;cursor:pointer;border:2px solid transparent;" onclick="toggleCloudSelection('${file.id}', '${thumbUrl}')">
+            <img src="${thumbUrl}" style="position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;" loading="lazy">
+            <div id="cloud-check-${file.id}" style="position:absolute;top:5px;right:5px;width:20px;height:20px;border-radius:50%;background:rgba(0,0,0,0.5);border:2px solid white;display:flex;align-items:center;justify-content:center;opacity:0.8;transition:all 0.2s;">
+               <span style="color:white;font-size:12px;display:none;">✓</span>
+            </div>
+          </div>
+        `;
+      });
+    }
+    html += `
+        </div>
+        <div style="flex-shrink:0;padding-top:1rem;border-top:1px solid var(--border-glass);display:flex;justify-content:space-between;align-items:center;">
+          <div style="font-size:0.85rem;color:var(--text-secondary);"><span id="cloud-sel-count">0</span> / 10 dipilih</div>
+          <button class="btn btn-primary" onclick="importSelectedCloudPhotos()" id="cloud-import-btn" disabled>Impor Terpilih</button>
+        </div>
+      </div>
+    `;
+    modal.innerHTML = html;
+  } catch (err) {
+    modal.innerHTML = `<div style="padding:2rem;text-align:center;color:red;">Error: ${err.message}<br><button class="btn btn-ghost mt-3" onclick="renderCloudProjects()">Kembali</button></div>`;
+  }
+}
+
+function toggleCloudSelection(fileId, thumbUrl) {
+  const card = document.getElementById(`cloud-card-${fileId}`);
+  const check = document.getElementById(`cloud-check-${fileId}`);
+  const btn = document.getElementById('cloud-import-btn');
+  const countEl = document.getElementById('cloud-sel-count');
+  
+  if (_cloudPhotosSelection.has(fileId)) {
+    _cloudPhotosSelection.delete(fileId);
+    card.style.borderColor = 'transparent';
+    check.style.background = 'rgba(0,0,0,0.5)';
+    check.style.borderColor = 'white';
+    check.querySelector('span').style.display = 'none';
+  } else {
+    if (_cloudPhotosSelection.size >= 10) {
+      if(window.Toast) Toast.show("Maksimal 10 foto dalam satu kali tarikan!", "warning");
+      return;
+    }
+    _cloudPhotosSelection.add(fileId);
+    if (!window._cloudUrlMap) window._cloudUrlMap = {};
+    window._cloudUrlMap[fileId] = thumbUrl;
+    
+    card.style.borderColor = 'var(--primary)';
+    check.style.background = 'var(--primary)';
+    check.style.borderColor = 'var(--primary)';
+    check.querySelector('span').style.display = 'block';
+  }
+  
+  countEl.innerText = _cloudPhotosSelection.size;
+  btn.disabled = _cloudPhotosSelection.size === 0;
+}
+
+async function importSelectedCloudPhotos() {
+  if (_cloudPhotosSelection.size === 0) return;
+  const projectId = IGBuilderState.projectId;
+  const modal = document.getElementById('modal-content');
+  
+  modal.innerHTML = `<div style="padding:2rem;text-align:center;">
+    <div style="margin-bottom:1rem;font-size:2rem;">📥</div>
+    <div>Mengimpor ${_cloudPhotosSelection.size} foto dari awan...</div>
+    <div style="font-size:0.8rem;color:var(--text-muted);margin-top:0.5rem;">Mohon tunggu sebentar.</div>
+  </div>`;
+  
+  try {
+    const photos = Store.getPhotos(projectId);
+    for (const fileId of _cloudPhotosSelection) {
+      const thumbUrl = window._cloudUrlMap[fileId];
+      if (!thumbUrl) continue;
+      
+      const newPhotoId = 'c_' + fileId.substring(0, 10); // Safe short ID
+      if (photos.find(p => p.id === newPhotoId)) continue;
+      
+      // Fetch thumbnail blob so it works normally in UI canvas
+      const res = await fetch(thumbUrl);
+      const blob = await res.blob();
+      const reader = new FileReader();
+      const thumbDataUrl = await new Promise((resolve) => {
+        reader.onload = e => resolve(e.target.result);
+        reader.readAsDataURL(blob);
+      });
+      
+      photos.push({
+        id: newPhotoId,
+        driveId: fileId,
+        isCloud: true,
+        isLiked: false,
+        addedAt: new Date().toISOString()
+      });
+      
+      // Save thumbnail
+      await PhotoDB.savePhotoBatch(projectId, { [newPhotoId]: thumbDataUrl }, true);
+      // Save HD flag
+      await PhotoDB.savePhotoBatch(projectId, { [newPhotoId]: "CLOUD_HD_PENDING:" + fileId }, false);
+    }
+    
+    Store.savePhotos(projectId, photos);
+    closeModal();
+    if(window.Toast) Toast.show(`Berhasil mengimpor ${_cloudPhotosSelection.size} foto!`, 'success');
+    
+    PhotoCache[projectId] = await PhotoDB.loadProjectPhotos(projectId, photos.map(p=>p.id), true);
+    renderIGBuilder();
+    
+  } catch (err) {
+    modal.innerHTML = `<div style="padding:2rem;text-align:center;color:red;">Error mengimpor: ${err.message}<br><button class="btn btn-ghost mt-3" onclick="closeModal()">Tutup</button></div>`;
+  }
+}
+
+// ══════════════════════════════════════
+// INIT APP
+// ══════════════════════════════════════
+
 // ── Rename Project from Project View ──
 function renameProjectInline(projectId) {
   const project = Store.get(projectId);
@@ -1928,7 +2235,10 @@ async function renderIGBuilder() {
     <div class="ig-builder-layout">
       <!-- Sidebar / Photo Pool -->
       <aside class="ig-sidebar" id="ig-sidebar">
-        <h4 style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:0.5rem;">Available Photos</h4>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+          <h4 style="font-size:0.85rem;color:var(--text-secondary);margin:0;">Available Photos</h4>
+          <button class="btn btn-ghost btn-sm" onclick="openCloudExplorer()" style="padding:0.3rem 0.5rem;font-size:0.7rem;border-color:var(--primary-soft);color:var(--primary-light);">☁️ Ambil dari Cloud</button>
+        </div>
         <div class="photo-grid" id="ig-photo-pool">
           <!-- Rendered in JS after loading cache -->
         </div>
