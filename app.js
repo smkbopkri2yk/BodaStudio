@@ -1744,6 +1744,17 @@ async function getCloudSyncUrl() {
 let _cloudExplorerCache = [];
 let _cloudPhotosSelection = new Set();
 
+async function startCloudProject() {
+  // Create a default project automatically so the user has a workspace
+  const dateStr = new Date().toLocaleDateString('id-ID', {day: '2-digit', month: 'short', year: 'numeric'});
+  const p = Store.create('Cloud Session ' + dateStr);
+  IGBuilderState.projectId = p.id;
+  // Re-render so the project exists in the UI before modal opens
+  await renderIGBuilder();
+  // Open the modal
+  openCloudExplorer();
+}
+
 async function openCloudExplorer() {
   const modal = document.getElementById('modal-content');
   const overlay = document.getElementById('modal-overlay');
@@ -2197,8 +2208,15 @@ async function renderIGBuilder() {
   const projects = Store.getAll();
 
   if (projects.length === 0) {
-    main.innerHTML = `<div class="page-enter">
-  <div class="page-header"><h2>IG Builder</h2><p>No projects available.</p></div>
+    main.innerHTML = `<div class="page-enter" style="height:100%; display:flex; flex-direction:column;">
+      <div class="page-header" style="margin-bottom:2rem;">
+        <h2>IG Builder</h2>
+        <p>Belum ada proyek foto lokal. Silakan unggah foto dari Dashboard, atau tarik langsung dari awan.</p>
+      </div>
+      <div style="flex:1; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:1.5rem;">
+         <div style="font-size:4rem; opacity:0.5;">☁️</div>
+         <button class="btn btn-primary" onclick="startCloudProject()" style="padding:1rem 2rem; font-size:1.1rem; border-radius:var(--radius-lg);">Ambil dari Link Boda (Cloud)</button>
+      </div>
     </div> `;
     return;
   }
@@ -2227,6 +2245,7 @@ async function renderIGBuilder() {
         <select class="btn btn-ghost" onchange="switchIGProject(this.value)" style="padding:0.5rem 1rem;background:var(--bg-glass);border:1px solid var(--border-glass);color:var(--text-primary);border-radius:var(--radius-xs);">
           ${projects.map(p => `<option value="${p.id}" ${p.id === IGBuilderState.projectId ? 'selected' : ''}>${p.name}</option>`).join('')}
         </select>
+        <button class="btn btn-ghost" onclick="openCloudExplorer()" style="padding:0.5rem 1rem;background:var(--bg-glass);border:1px solid var(--border-glass);color:var(--primary-light);border-radius:var(--radius-xs);" title="Ambil dari Link Boda">☁️ Ambil dari Cloud</button>
         <button class="btn btn-primary" onclick="IGBuilderState.addSlide();renderIGSlides();">+ Add Slide</button>
         <button class="btn btn-primary" onclick="batchExportIGSlides()" style="background:var(--success);">📥 PC Export All</button>
       </div>
